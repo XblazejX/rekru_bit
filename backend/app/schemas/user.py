@@ -9,9 +9,14 @@ class UserRegister(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
     confirm_password: str
+    notify_on_events: bool
 
     @model_validator(mode="after")
     def passwords_match(self) -> "UserRegister":
+        self.first_name = self.first_name.strip()
+        self.last_name = self.last_name.strip()
+        if len(self.first_name) < 2 or len(self.last_name) < 2:
+            raise ValueError("Imię i nazwisko muszą mieć co najmniej 2 znaki")
         if self.password != self.confirm_password:
             raise ValueError("Hasła muszą być identyczne")
         return self
@@ -60,6 +65,21 @@ class UserUpdate(BaseModel):
     last_name: str | None = Field(None, min_length=2, max_length=50)
     notify_on_events: bool | None = None
     theme: str | None = Field(None, pattern="^(dark|light)$")
+
+    @model_validator(mode="after")
+    def require_at_least_one_change(self) -> "UserUpdate":
+        if not self.model_fields_set:
+            raise ValueError("Podaj przynajmniej jedno pole do zmiany")
+        if any(getattr(self, field) is None for field in self.model_fields_set):
+            raise ValueError("Pola profilu nie mogą być puste")
+        for field in ("first_name", "last_name"):
+            value = getattr(self, field)
+            if value is not None:
+                value = value.strip()
+                if len(value) < 2:
+                    raise ValueError("Imię i nazwisko muszą mieć co najmniej 2 znaki")
+                setattr(self, field, value)
+        return self
 
 
 class UserResponse(BaseModel):

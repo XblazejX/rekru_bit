@@ -28,11 +28,17 @@ class User(Base, TimestampMixin):
     verification_code_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    verification_attempts: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
 
     # Reset hasła
     reset_password_code_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     reset_password_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    reset_password_attempts: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
     )
 
     # Preferencje użytkownika

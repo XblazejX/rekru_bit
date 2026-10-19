@@ -66,12 +66,25 @@ bit2meet/
    ```bash
    docker compose up --build -d
    ```
+   Kontener API automatycznie zastosuje oczekujące migracje Alembica przed uruchomieniem serwera.
 3. Aplikacja jest dostępna pod adresami:
    - **Frontend (Web):** [http://localhost:3000](http://localhost:3000)
    - **Backend API:** [http://localhost:8000](http://localhost:8000)
    - **Dokumentacja Swagger:** [http://localhost:8000/docs](http://localhost:8000/docs)
    - **Healthcheck API:** [http://localhost:8000/api/health](http://localhost:8000/api/health)
    - **Healthcheck Bazy:** [http://localhost:8000/api/health/db](http://localhost:8000/api/health/db)
+
+### Uwierzytelnianie (Etap 3)
+
+Endpointy są dostępne pod prefiksem `/api/auth`:
+
+- `POST /register` — rejestracja konta i wysłanie kodu weryfikacyjnego
+- `POST /verify` i `POST /resend-code` — potwierdzenie adresu e-mail i ponowna wysyłka kodu
+- `POST /login` — token JWT dla aktywnego konta
+- `POST /forgot-password` i `POST /reset-password` — reset hasła kodem
+- `GET /me` i `PATCH /me` — profil, motyw oraz zgoda na powiadomienia
+
+Domyślnie `EMAIL_MODE=mock`: kod jest wypisywany w logach API, co pozwala uruchomić projekt bez konta pocztowego. Dla SMTP ustaw `EMAIL_MODE=smtp` oraz `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` i `SMTP_FROM` w lokalnym `.env`. Nie umieszczaj haseł ani kluczy pocztowych w repozytorium.
 
 ---
 

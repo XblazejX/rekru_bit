@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Bit2Meet"
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
+    SQL_ECHO: bool = False
 
     # Baza danych
     POSTGRES_USER: str = "bit2meet_user"
@@ -44,6 +45,8 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     VERIFICATION_CODE_EXPIRE_MINUTES: int = 15
+    RESET_CODE_EXPIRE_MINUTES: int = 15
+    EMAIL_MODE: str = "mock"
 
     # SMTP
     SMTP_HOST: str = "smtp.example.com"

@@ -11,7 +11,8 @@ from app.core.config import settings
 
 engine = create_async_engine(
     settings.DATABASE_URL,
-    echo=settings.DEBUG,
+    # SQLAlchemy echo prints bound values, including password/code hashes, to container logs.
+    echo=settings.SQL_ECHO,
     future=True,
     pool_pre_ping=True,
 )
