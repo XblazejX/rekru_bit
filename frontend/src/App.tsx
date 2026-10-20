@@ -1,294 +1,466 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { CheckCircle2, XCircle, RefreshCw, Moon, Sun, Server, Database, Calendar } from 'lucide-react';
+import { FormEvent, ReactNode, useCallback, useEffect, useState } from 'react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Bell,
+  CalendarDays,
+  Check,
+  Clock3,
+  LoaderCircle,
+  LockKeyhole,
+  LogOut,
+  Mail,
+  Moon,
+  ShieldCheck,
+  Sun,
+  UserRound,
+} from 'lucide-react';
+import { authRequest, AuthResponse, tokenStorage, updateProfile, User } from './api';
+import './styles/auth.css';
 
-interface ApiHealth {
-  status: string;
-  app: string;
-  environment: string;
-}
+type Screen = 'login' | 'register' | 'verify' | 'forgot' | 'reset' | 'dashboard';
+type Theme = 'dark' | 'light';
 
-interface DbHealth {
-  status: string;
-  database: string;
-}
+const FLOW_KEY = 'bit2meet.authFlow';
+const THEME_KEY = 'bit2meet.theme';
 
-export const App: React.FC = () => {
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-  const [apiHealth, setApiHealth] = useState<ApiHealth | null>(null);
-  const [dbHealth, setDbHealth] = useState<DbHealth | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const toggleTheme = () => {
-    const nextTheme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(nextTheme);
-    document.documentElement.setAttribute('data-theme', nextTheme);
-  };
-
-  const checkHealth = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      // 1. Sprawdzenie API
-      const apiRes = await fetch('/api/health');
-      if (!apiRes.ok) throw new Error(`Błąd API: status ${apiRes.status}`);
-      const apiData = await apiRes.json();
-      setApiHealth(apiData);
-
-      // 2. Sprawdzenie Bazy Danych
-      try {
-        const dbRes = await fetch('/api/health/db');
-        if (dbRes.ok) {
-          const dbData = await dbRes.json();
-          setDbHealth(dbData);
-        } else {
-          setDbHealth({ status: 'error', database: 'disconnected' });
-        }
-      } catch {
-        setDbHealth({ status: 'error', database: 'disconnected' });
+function getInitialFlow(): { screen: Screen; email: string } {
+  try {
+    const value = sessionStorage.getItem(FLOW_KEY);
+    if (value) {
+      const parsed = JSON.parse(value) as { screen?: Screen; email?: string };
+      if ((parsed.screen === 'verify' || parsed.screen === 'reset') && parsed.email) {
+        return { screen: parsed.screen, email: parsed.email };
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Nie można połączyć się z API';
-      setError(msg);
-      setApiHealth(null);
-      setDbHealth(null);
-    } finally {
-      setLoading(false);
     }
-  }, []);
+  } catch {
+    sessionStorage.removeItem(FLOW_KEY);
+  }
+  return { screen: 'login', email: '' };
+}
+
+function setDocumentTheme(theme: Theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem(THEME_KEY, theme);
+}
+
+function getInitialTheme(): Theme {
+  return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark';
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : 'Coś poszło nie tak. Spróbuj ponownie.';
+}
+
+export const App = () => {
+  const initialFlow = getInitialFlow();
+  const [screen, setScreen] = useState<Screen>(initialFlow.screen);
+  const [email, setEmail] = useState(initialFlow.email);
+  const [user, setUser] = useState<User | null>(null);
+  const [theme, setTheme] = useState<Theme>(getInitialTheme);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const showScreen = useCallback((next: Screen, nextEmail = email) => {
+    setError('');
+    setNotice('');
+    if (next === 'verify' || next === 'reset') {
+      sessionStorage.setItem(FLOW_KEY, JSON.stringify({ screen: next, email: nextEmail }));
+    } else {
+      sessionStorage.removeItem(FLOW_KEY);
+    }
+    setEmail(nextEmail);
+    setScreen(next);
+  }, [email]);
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    checkHealth();
-  }, [checkHealth, theme]);
+    setDocumentTheme(theme);
+  }, [theme]);
+
+  useEffect(() => {
+    const token = tokenStorage.get();
+    if (!token) return;
+    let cancelled = false;
+    authRequest<User>('me', undefined, true)
+      .then((profile) => {
+        if (cancelled) return;
+        setUser(profile);
+        setTheme(profile.theme);
+        setScreen('dashboard');
+      })
+      .catch(() => {
+        tokenStorage.clear();
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const finishLogin = (response: AuthResponse) => {
+    tokenStorage.set(response.access_token);
+    sessionStorage.removeItem(FLOW_KEY);
+    setUser(response.user);
+    setTheme(response.user.theme);
+    setDocumentTheme(response.user.theme);
+    setError('');
+    setNotice('');
+    setScreen('dashboard');
+  };
+
+  const handleRegister = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const nextEmail = String(data.get('email')).trim().toLowerCase();
+    setBusy(true);
+    setError('');
+    try {
+      await authRequest('register', {
+        first_name: String(data.get('first_name')).trim(),
+        last_name: String(data.get('last_name')).trim(),
+        email: nextEmail,
+        password: String(data.get('password')),
+        confirm_password: String(data.get('confirm_password')),
+        notify_on_events: data.get('notify_on_events') === 'yes',
+      });
+      showScreen('verify', nextEmail);
+      setNotice('Wysłaliśmy kod weryfikacyjny na podany adres. Sprawdź też folder spam.');
+    } catch (requestError) {
+      setError(errorText(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleVerify = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    setBusy(true);
+    setError('');
+    try {
+      const response = await authRequest<AuthResponse>('verify', {
+        email,
+        code: String(data.get('code')).trim(),
+      });
+      finishLogin(response);
+    } catch (requestError) {
+      setError(errorText(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleResendCode = async () => {
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const response = await authRequest<{ message: string }>('resend-code', { email });
+      setNotice(response.message);
+    } catch (requestError) {
+      setError(errorText(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    setBusy(true);
+    setError('');
+    try {
+      const response = await authRequest<AuthResponse>('login', {
+        email: String(data.get('email')).trim().toLowerCase(),
+        password: String(data.get('password')),
+      });
+      finishLogin(response);
+    } catch (requestError) {
+      setError(errorText(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleForgotPassword = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const nextEmail = String(data.get('email')).trim().toLowerCase();
+    setBusy(true);
+    setError('');
+    try {
+      const response = await authRequest<{ message: string }>('forgot-password', {
+        email: nextEmail,
+      });
+      showScreen('reset', nextEmail);
+      setNotice(response.message + ' Wpisz kod otrzymany w wiadomości.');
+    } catch (requestError) {
+      setError(errorText(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleResetPassword = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    setBusy(true);
+    setError('');
+    try {
+      const response = await authRequest<{ message: string }>('reset-password', {
+        email,
+        code: String(data.get('code')).trim(),
+        new_password: String(data.get('new_password')),
+        confirm_new_password: String(data.get('confirm_new_password')),
+      });
+      showScreen('login');
+      setNotice(response.message + ' Możesz zalogować się nowym hasłem.');
+    } catch (requestError) {
+      setError(errorText(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleThemeToggle = async () => {
+    const nextTheme: Theme = theme === 'dark' ? 'light' : 'dark';
+    setTheme(nextTheme);
+    setDocumentTheme(nextTheme);
+    if (user) {
+      try {
+        const updated = await updateProfile<User>({ theme: nextTheme });
+        setUser(updated);
+      } catch (requestError) {
+        setError(errorText(requestError));
+      }
+    }
+  };
+
+  const handlePreferenceSave = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const updated = await updateProfile<User>({
+        notify_on_events: data.get('notify_on_events') === 'yes',
+      });
+      setUser(updated);
+      setNotice('Ustawienia zostały zapisane.');
+    } catch (requestError) {
+      setError(errorText(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleLogout = () => {
+    tokenStorage.clear();
+    setUser(null);
+    setNotice('');
+    setError('');
+    showScreen('login');
+  };
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      {/* Pasek nawigacyjny */}
-      <header
-        style={{
-          borderBottom: '1px solid var(--border)',
-          backgroundColor: 'var(--surface)',
-          padding: '1rem 2rem',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <div
-            style={{
-              width: '36px',
-              height: '36px',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'var(--accent)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'var(--accent-text)',
-            }}
-          >
-            <Calendar size={20} />
-          </div>
-          <div>
-            <h1 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0 }}>Bit2Meet</h1>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: 0 }}>
-              Koordynator terminów (BIT Web)
-            </p>
-          </div>
+    <div className="app-shell">
+      <header className="topbar">
+        <a className="brand" href="/" aria-label="Bit2Meet — strona główna">
+          <span className="brand-mark"><CalendarDays size={20} strokeWidth={2.2} /></span>
+          <span className="brand-name">Bit<span>2</span>Meet</span>
+        </a>
+        <div className="topbar-actions">
+          {user && <span className="topbar-user">{user.first_name}</span>}
+          <button className="theme-toggle" onClick={handleThemeToggle} aria-label="Przełącz motyw">
+            {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+            <span>{theme === 'dark' ? 'Jasny motyw' : 'Ciemny motyw'}</span>
+          </button>
         </div>
-
-        <button
-          onClick={toggleTheme}
-          aria-label="Przełącz motyw"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            padding: '0.5rem 1rem',
-            borderRadius: 'var(--radius-md)',
-            border: '1px solid var(--border)',
-            backgroundColor: 'var(--surface-hover)',
-            color: 'var(--text)',
-            fontSize: '0.875rem',
-            transition: 'background-color var(--transition-fast)',
-          }}
-        >
-          {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-          <span>{theme === 'dark' ? 'Jasny motyw' : 'Ciemny motyw'}</span>
-        </button>
       </header>
 
-      {/* Główna treść */}
-      <main
-        style={{
-          flex: 1,
-          maxWidth: '800px',
-          width: '100%',
-          margin: '0 auto',
-          padding: '2.5rem 1.5rem',
-        }}
-      >
-        <section
-          style={{
-            backgroundColor: 'var(--surface)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-lg)',
-            padding: '2rem',
-            boxShadow: 'var(--shadow-md)',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: '1.5rem',
-              flexWrap: 'wrap',
-              gap: '1rem',
-            }}
-          >
-            <div>
-              <h2 style={{ fontSize: '1.5rem', fontWeight: 600 }}>Stan środowiska — Etap 1</h2>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '0.25rem' }}>
-                Weryfikacja komunikacji między serwisami (Frontend ↔ Backend ↔ Baza PostgreSQL).
-              </p>
-            </div>
-
-            <button
-              onClick={checkHealth}
-              disabled={loading}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '0.5rem',
-                padding: '0.625rem 1.25rem',
-                backgroundColor: 'var(--accent)',
-                color: 'var(--accent-text)',
-                borderRadius: 'var(--radius-md)',
-                fontWeight: 600,
-                fontSize: '0.875rem',
-                opacity: loading ? 0.7 : 1,
-                cursor: loading ? 'not-allowed' : 'pointer',
-              }}
-            >
-              <RefreshCw size={16} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
-              <span>{loading ? 'Sprawdzanie...' : 'Odśwież status'}</span>
-            </button>
+      {screen === 'dashboard' && user ? (
+        <main className="dashboard-page">
+          <div className="dashboard-heading">
+            <div className="eyebrow"><span className="status-dot" /> KONTO AKTYWNE</div>
+            <h1>Cześć, {user.first_name}.</h1>
+            <p>Twoje konto Bit2Meet jest gotowe do użycia.</p>
           </div>
 
-          {error && (
-            <div
-              style={{
-                padding: '1rem',
-                marginBottom: '1.5rem',
-                backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                border: '1px solid var(--danger)',
-                borderRadius: 'var(--radius-md)',
-                color: 'var(--danger)',
-                fontSize: '0.875rem',
-              }}
-            >
-              <strong>Błąd połączenia:</strong> {error}
+          <section className="dashboard-card profile-card">
+            <div className="section-heading">
+              <div className="section-icon"><UserRound size={19} /></div>
+              <div><h2>Twój profil</h2><p>Dane konta i preferencje</p></div>
             </div>
-          )}
-
-          {/* Karty statusu */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-              gap: '1rem',
-              marginTop: '1rem',
-            }}
-          >
-            {/* Karta API */}
-            <div
-              style={{
-                padding: '1.25rem',
-                borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--border)',
-                backgroundColor: 'var(--bg)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.5rem',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600 }}>
-                  <Server size={18} color="var(--accent)" />
-                  Backend API (FastAPI)
+            <div className="profile-details">
+              <div><span>Imię i nazwisko</span><strong>{user.first_name} {user.last_name}</strong></div>
+              <div><span>Adres e-mail</span><strong>{user.email}</strong></div>
+            </div>
+            <form className="preference-form" onSubmit={handlePreferenceSave}>
+              <div className="preference-row">
+                <span className="preference-icon"><Bell size={18} /></span>
+                <span className="preference-copy"><strong>Powiadomienia o wydarzeniach</strong><small>Informacje o zmianach i ustalonych terminach</small></span>
+                <span className="radio-pair">
+                  <label><input type="radio" name="notify_on_events" value="yes" defaultChecked={user.notify_on_events} /> Tak</label>
+                  <label><input type="radio" name="notify_on_events" value="no" defaultChecked={!user.notify_on_events} /> Nie</label>
                 </span>
-                {apiHealth?.status === 'ok' ? (
-                  <CheckCircle2 size={20} color="var(--success)" aria-label="API działa poprawnie" />
-                ) : (
-                  <XCircle size={20} color="var(--danger)" aria-label="API niedostępne" />
-                )}
               </div>
-              <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-                {apiHealth ? (
-                  <>
-                    <div>Status: <span style={{ color: 'var(--success)', fontWeight: 600 }}>Działa ({apiHealth.status})</span></div>
-                    <div>Aplikacja: {apiHealth.app}</div>
-                    <div>Środowisko: {apiHealth.environment}</div>
-                  </>
-                ) : (
-                  <div>Status: <span style={{ color: 'var(--danger)' }}>Brak odpowiedzi</span></div>
-                )}
+              <button className="button button-secondary button-small" type="submit" disabled={busy}>
+                {busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}
+                Zapisz preferencję
+              </button>
+            </form>
+          </section>
+
+          <section className="dashboard-card events-empty">
+            <div className="empty-calendar"><CalendarDays size={25} /></div>
+            <h2>Twoje wydarzenia pojawią się tutaj</h2>
+            <p>Za chwilę dodamy tworzenie wydarzeń i wspólną siatkę dostępności.</p>
+          </section>
+
+          {(error || notice) && <Feedback error={error} notice={notice} />}
+          <button className="logout-button" onClick={handleLogout}><LogOut size={16} /> Wyloguj się</button>
+        </main>
+      ) : (
+        <main className="auth-page">
+          <section className="welcome-panel">
+            <div className="welcome-orb orb-one" />
+            <div className="welcome-orb orb-two" />
+            <div className="welcome-content">
+              <div className="welcome-kicker"><span className="kicker-line" /> MNIEJ USTALANIA. WIĘCEJ SPOTKAŃ.</div>
+              <h1>Znajdźcie<br />wspólny <span>czas.</span></h1>
+              <p>Jedno miejsce, w którym każdy zaznacza swoją dostępność, a najlepszy termin widać od razu.</p>
+              <div className="welcome-points">
+                <div><span className="point-icon"><Clock3 size={17} /></span><span>Terminy w czytelnej siatce</span></div>
+                <div><span className="point-icon"><ShieldCheck size={17} /></span><span>Twoje konto i preferencje</span></div>
               </div>
             </div>
+            <div className="welcome-footer">BIT2MEET <span>·</span> KOORDYNATOR TERMINÓW</div>
+          </section>
 
-            {/* Karta Bazy Danych */}
-            <div
-              style={{
-                padding: '1.25rem',
-                borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--border)',
-                backgroundColor: 'var(--bg)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.5rem',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600 }}>
-                  <Database size={18} color="var(--accent)" />
-                  Baza Danych (PostgreSQL)
-                </span>
-                {dbHealth?.database === 'connected' ? (
-                  <CheckCircle2 size={20} color="var(--success)" aria-label="Baza podłączona" />
-                ) : (
-                  <XCircle size={20} color="var(--danger)" aria-label="Baza niepodłączona" />
-                )}
-              </div>
-              <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-                {dbHealth?.database === 'connected' ? (
-                  <div>Połączenie: <span style={{ color: 'var(--success)', fontWeight: 600 }}>Aktywne</span></div>
-                ) : (
-                  <div>Połączenie: <span style={{ color: 'var(--danger)' }}>Brak połączenia</span></div>
-                )}
-                <div>Silnik: PostgreSQL 16</div>
-              </div>
+          <section className="auth-panel">
+            <div className="auth-card">
+              {screen === 'login' && <>
+                <div className="form-kicker">WITAMY PONOWNIE</div>
+                <h2>Zaloguj się</h2>
+                <p className="form-intro">Zaloguj się, aby przejść do swojego konta.</p>
+                <Feedback error={error} notice={notice} />
+                <form className="auth-form" onSubmit={handleLogin}>
+                  <Field label="Adres e-mail" icon={<Mail size={17} />}><input name="email" type="email" autoComplete="email" placeholder="ty@przyklad.pl" required /></Field>
+                  <Field label="Hasło" icon={<LockKeyhole size={17} />}><input name="password" type="password" autoComplete="current-password" placeholder="Wpisz hasło" required /></Field>
+                  <button className="text-link forgot-link" type="button" onClick={() => showScreen('forgot')}>Nie pamiętasz hasła?</button>
+                  <SubmitButton busy={busy}>Zaloguj się <ArrowRight size={17} /></SubmitButton>
+                </form>
+                <div className="form-switch">Nie masz jeszcze konta? <button className="text-link" onClick={() => showScreen('register')}>Utwórz konto</button></div>
+              </>}
+
+              {screen === 'register' && <>
+                <button className="back-link" onClick={() => showScreen('login')}><ArrowLeft size={16} /> Wróć do logowania</button>
+                <div className="form-kicker">DOŁĄCZ DO BIT2MEET</div>
+                <h2>Utwórz konto</h2>
+                <p className="form-intro">Zajmie to tylko chwilę.</p>
+                <Feedback error={error} notice={notice} />
+                <form className="auth-form" onSubmit={handleRegister}>
+                  <div className="name-fields">
+                    <Field label="Imię"><input name="first_name" autoComplete="given-name" placeholder="Jan" minLength={2} maxLength={50} required /></Field>
+                    <Field label="Nazwisko"><input name="last_name" autoComplete="family-name" placeholder="Kowalski" minLength={2} maxLength={50} required /></Field>
+                  </div>
+                  <Field label="Adres e-mail" icon={<Mail size={17} />}><input name="email" type="email" autoComplete="email" placeholder="ty@przyklad.pl" required /></Field>
+                  <Field label="Hasło" icon={<LockKeyhole size={17} />} hint="Minimum 8 znaków"><input name="password" type="password" autoComplete="new-password" minLength={8} maxLength={128} placeholder="Utwórz hasło" required /></Field>
+                  <Field label="Powtórz hasło" icon={<LockKeyhole size={17} />}><input name="confirm_password" type="password" autoComplete="new-password" minLength={8} maxLength={128} placeholder="Wpisz hasło ponownie" required /></Field>
+                  <fieldset className="notification-choice">
+                    <legend>Maile o wydarzeniach</legend>
+                    <p>Czy chcesz otrzymywać powiadomienia e-mail o wydarzeniach?</p>
+                    <div className="choice-options">
+                      <label><input type="radio" name="notify_on_events" value="yes" defaultChecked required /> Tak, chcę otrzymywać</label>
+                      <label><input type="radio" name="notify_on_events" value="no" /> Nie, dziękuję</label>
+                    </div>
+                  </fieldset>
+                  <SubmitButton busy={busy}>Utwórz konto <ArrowRight size={17} /></SubmitButton>
+                </form>
+                <div className="form-switch">Masz już konto? <button className="text-link" onClick={() => showScreen('login')}>Zaloguj się</button></div>
+              </>}
+
+              {screen === 'verify' && <>
+                <button className="back-link" onClick={() => showScreen('register')}><ArrowLeft size={16} /> Wróć do rejestracji</button>
+                <div className="large-icon"><Mail size={23} /></div>
+                <div className="form-kicker">JESZCZE JEDEN KROK</div>
+                <h2>Sprawdź swoją pocztę</h2>
+                <p className="form-intro">Wysłaliśmy 6-cyfrowy kod na <strong>{email}</strong>. Wpisz go poniżej, aby aktywować konto.</p>
+                <Feedback error={error} notice={notice} />
+                <form className="auth-form" onSubmit={handleVerify}>
+                  <Field label="Kod weryfikacyjny"><input className="code-input" name="code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" minLength={6} maxLength={6} placeholder="000000" required /></Field>
+                  <SubmitButton busy={busy}>Potwierdź adres <ArrowRight size={17} /></SubmitButton>
+                </form>
+                <div className="form-switch">Nie dotarł? <button className="text-link" onClick={handleResendCode} disabled={busy}>Wyślij kod ponownie</button></div>
+              </>}
+
+              {screen === 'forgot' && <>
+                <button className="back-link" onClick={() => showScreen('login')}><ArrowLeft size={16} /> Wróć do logowania</button>
+                <div className="large-icon"><LockKeyhole size={23} /></div>
+                <div className="form-kicker">ODZYSKIWANIE DOSTĘPU</div>
+                <h2>Nie pamiętasz hasła?</h2>
+                <p className="form-intro">Podaj adres e-mail powiązany z kontem. Wyślemy na niego kod do zmiany hasła.</p>
+                <Feedback error={error} notice={notice} />
+                <form className="auth-form" onSubmit={handleForgotPassword}>
+                  <Field label="Adres e-mail" icon={<Mail size={17} />}><input name="email" type="email" autoComplete="email" placeholder="ty@przyklad.pl" required /></Field>
+                  <SubmitButton busy={busy}>Wyślij kod <ArrowRight size={17} /></SubmitButton>
+                </form>
+              </>}
+
+              {screen === 'reset' && <>
+                <button className="back-link" onClick={() => showScreen('forgot')}><ArrowLeft size={16} /> Zmień adres e-mail</button>
+                <div className="large-icon"><LockKeyhole size={23} /></div>
+                <div className="form-kicker">USTAW NOWE HASŁO</div>
+                <h2>Zmień hasło</h2>
+                <p className="form-intro">Wpisz kod wysłany na <strong>{email}</strong> i ustaw nowe hasło.</p>
+                <Feedback error={error} notice={notice} />
+                <form className="auth-form" onSubmit={handleResetPassword}>
+                  <Field label="Kod z wiadomości"><input className="code-input" name="code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" minLength={6} maxLength={6} placeholder="000000" required /></Field>
+                  <Field label="Nowe hasło" hint="Minimum 8 znaków"><input name="new_password" type="password" autoComplete="new-password" minLength={8} maxLength={128} placeholder="Utwórz nowe hasło" required /></Field>
+                  <Field label="Powtórz nowe hasło"><input name="confirm_new_password" type="password" autoComplete="new-password" minLength={8} maxLength={128} placeholder="Wpisz hasło ponownie" required /></Field>
+                  <SubmitButton busy={busy}>Zapisz nowe hasło <ArrowRight size={17} /></SubmitButton>
+                </form>
+              </>}
             </div>
-          </div>
-        </section>
-      </main>
-
-      {/* Stopka */}
-      <footer
-        style={{
-          borderTop: '1px solid var(--border)',
-          backgroundColor: 'var(--surface)',
-          padding: '1rem',
-          textAlign: 'center',
-          fontSize: '0.75rem',
-          color: 'var(--text-muted)',
-        }}
-      >
-        Bit2Meet &copy; 2026 — Projekt zaliczeniowy BIT Web | Etap 1: Szkielet projektu
-      </footer>
+            <div className="auth-footnote"><ShieldCheck size={15} /> Twoje dane są chronione i używane tylko do obsługi konta.</div>
+          </section>
+        </main>
+      )}
     </div>
   );
 };
+
+function Field({
+  label,
+  icon,
+  hint,
+  children,
+}: {
+  label: string;
+  icon?: ReactNode;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <label className="field">
+      <span className="field-heading"><span>{label}</span>{hint && <small>{hint}</small>}</span>
+      <span className={`input-wrap${icon ? ' has-icon' : ''}`}>{icon}{children}</span>
+    </label>
+  );
+}
+
+function SubmitButton({ busy, children }: { busy: boolean; children: ReactNode }) {
+  return (
+    <button className="button button-primary submit-button" type="submit" disabled={busy}>
+      {busy ? <><LoaderCircle className="spin" size={17} /> Chwilka...</> : children}
+    </button>
+  );
+}
+
+function Feedback({ error, notice }: { error: string; notice: string }) {
+  if (!error && !notice) return null;
+  return <div className={`feedback ${error ? 'feedback-error' : 'feedback-success'}`} role={error ? 'alert' : 'status'}>{error || notice}</div>;
+}
 
 export default App;
