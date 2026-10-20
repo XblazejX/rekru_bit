@@ -19,6 +19,7 @@ import {
   Users,
 } from 'lucide-react';
 import { authRequest, AuthResponse, eventRequest, EventItem, tokenStorage, updateProfile, User } from './api';
+import AvailabilityGrid from './AvailabilityGrid';
 import './styles/auth.css';
 
 type Screen = 'login' | 'register' | 'verify' | 'forgot' | 'reset' | 'dashboard' | 'event';
@@ -470,7 +471,7 @@ export const App = () => {
           <button className="logout-button" onClick={handleLogout}><LogOut size={16} /> Wyloguj się</button>
         </main>
       ) : screen === 'event' ? (
-        <main className="event-page">
+        <main className="event-page event-calendar-page">
           <button className="back-link event-back" onClick={() => {
             if (user) {
               window.history.replaceState({}, '', '/');
@@ -486,24 +487,19 @@ export const App = () => {
               {error && <Feedback error={error} notice="" />}
             </section>
             : <>
-              <div className="event-detail-kicker"><span className="status-dot" /> SPOTKANIE BIT2MEET</div>
-              <section className="dashboard-card event-detail-card">
-                <div className="event-detail-heading">
-                  <div className="section-icon"><CalendarDays size={20} /></div>
-                  <span className="owner-badge"><Users size={13} /> {sharedEvent.participants_count} {sharedEvent.participants_count === 1 ? 'uczestnik' : 'uczestników'}</span>
+              <section className="event-overview">
+                <div className="event-overview-copy">
+                  <h1>{sharedEvent.title}</h1>
+                  <p>{sharedEvent.description || 'Organizator nie dodał opisu spotkania.'}</p>
                 </div>
-                <h1>{sharedEvent.title}</h1>
-                <p className="event-description">{sharedEvent.description || 'Organizator nie dodał opisu spotkania.'}</p>
-                <div className="event-detail-divider" />
-                <h2>Wybierzcie wspólny termin</h2>
-                <p className="form-intro">Dołącz do spotkania, a potem zaznacz dni i godziny, w których możesz się spotkać. Swoją dostępność będzie można zmienić w każdej chwili.</p>
-                {!user ? <button className="button button-primary submit-button" onClick={handleJoinEvent}>
-                  Dołącz do spotkania <ArrowRight size={17} />
-                </button> : isMember ? <div className="event-joined"><Check size={16} /> Jesteś uczestnikiem tego spotkania.</div> : <button className="button button-primary submit-button" onClick={handleJoinEvent} disabled={busy}>
-                  {busy ? 'Dołączanie…' : 'Dołącz do spotkania'} <ArrowRight size={17} />
-                </button>}
-                {(error || notice) && <Feedback error={error} notice={notice} />}
+                <div className="event-overview-actions">
+                  {!isMember && <button className="button button-primary" onClick={handleJoinEvent} disabled={busy}>
+                    {busy ? 'Dołączanie…' : 'Dołącz do spotkania'} <ArrowRight size={17} />
+                  </button>}
+                </div>
               </section>
+              {(error || notice) && <Feedback error={error} notice={notice} />}
+              {user && isMember && <AvailabilityGrid publicId={sharedEvent.public_id} />}
             </>}
         </main>
       ) : (

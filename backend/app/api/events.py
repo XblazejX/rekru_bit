@@ -1,15 +1,24 @@
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, or_, select
+
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user
 from app.db.session import get_db
+from app.models.availability import AvailabilitySlot
 from app.models.event import Event
 from app.models.message import EventMessage
 from app.models.participant import EventParticipant
 from app.models.user import User
+from app.schemas.availability import (
+    AvailabilitySetRequest,
+    AvailabilitySlotResponse,
+    EventAggregationResponse,
+    SlotAggregateItem,
+)
 from app.schemas.event import EventCreate, EventListItem, EventResponse, EventUpdate
 
 router = APIRouter(prefix="/events", tags=["Events"])
@@ -88,6 +97,111 @@ async def get_event_membership(
         )
     )
     return {"is_member": member_id is not None}
+
+
+async def _require_event_member(event: Event, user: User, db: AsyncSession) -> None:
+    member_id = await db.scalar(
+        select(EventParticipant.id).where(
+            EventParticipant.event_id == event.id,
+            EventParticipant.user_id == user.id,
+        )
+    )
+    if member_id is None:
+        raise HTTPException(status_code=403, detail="Najpierw dołącz do tego spotkania")
+
+
+@router.get("/{public_id}/availability", response_model=EventAggregationResponse)
+async def get_availability_aggregation(
+    public_id: str, db: DbSession
+) -> EventAggregationResponse:
+    event = await db.scalar(select(Event).where(Event.public_id == public_id))
+    if event is None:
+        raise HTTPException(status_code=404, detail="Nie znaleziono spotkania")
+
+    total_participants = await db.scalar(
+        select(func.count(EventParticipant.id)).where(EventParticipant.event_id == event.id)
+    )
+    rows = await db.execute(
+        select(AvailabilitySlot.slot_start, func.count(func.distinct(AvailabilitySlot.user_id)))
+        .where(AvailabilitySlot.event_id == event.id)
+        .group_by(AvailabilitySlot.slot_start)
+        .order_by(AvailabilitySlot.slot_start)
+    )
+    total = total_participants or 0
+    slots = [
+        SlotAggregateItem(
+            slot_start=slot_start,
+            available_count=count,
+            available_percentage=round(count * 100 / total, 1) if total else 0,
+        )
+        for slot_start, count in rows
+    ]
+    return EventAggregationResponse(
+        public_id=event.public_id,
+        total_participants=total,
+        slots=slots,
+    )
+
+
+@router.get("/{public_id}/availability/me", response_model=list[AvailabilitySlotResponse])
+async def get_my_availability(
+    public_id: str, current_user: CurrentUser, db: DbSession
+) -> list[AvailabilitySlot]:
+    event = await db.scalar(select(Event).where(Event.public_id == public_id))
+    if event is None:
+        raise HTTPException(status_code=404, detail="Nie znaleziono spotkania")
+    await _require_event_member(event, current_user, db)
+    slots = await db.scalars(
+        select(AvailabilitySlot)
+        .where(
+            AvailabilitySlot.event_id == event.id,
+            AvailabilitySlot.user_id == current_user.id,
+        )
+        .order_by(AvailabilitySlot.slot_start)
+    )
+    return list(slots)
+
+
+@router.put("/{public_id}/availability/me", response_model=list[AvailabilitySlotResponse])
+async def save_my_availability(
+    public_id: str,
+    payload: AvailabilitySetRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> list[AvailabilitySlot]:
+    event = await db.scalar(select(Event).where(Event.public_id == public_id))
+    if event is None:
+        raise HTTPException(status_code=404, detail="Nie znaleziono spotkania")
+    await _require_event_member(event, current_user, db)
+
+    normalized: set[datetime] = set()
+    for slot_start in payload.slot_starts:
+        if slot_start.tzinfo is None or slot_start.utcoffset() is None:
+            raise HTTPException(status_code=422, detail="Godzina musi zawierać strefę czasową")
+        if slot_start.minute not in (0, 30) or slot_start.second or slot_start.microsecond:
+            raise HTTPException(status_code=422, detail="Dostępność wybiera się w krokach co 30 minut")
+        normalized.add(slot_start.astimezone(UTC))
+
+    await db.execute(
+        delete(AvailabilitySlot).where(
+            AvailabilitySlot.event_id == event.id,
+            AvailabilitySlot.user_id == current_user.id,
+        )
+    )
+    db.add_all(
+        AvailabilitySlot(event_id=event.id, user_id=current_user.id, slot_start=slot_start)
+        for slot_start in sorted(normalized)
+    )
+    await db.commit()
+    saved = await db.scalars(
+        select(AvailabilitySlot)
+        .where(
+            AvailabilitySlot.event_id == event.id,
+            AvailabilitySlot.user_id == current_user.id,
+        )
+        .order_by(AvailabilitySlot.slot_start)
+    )
+    return list(saved)
 
 
 @router.post("/{public_id}/join", response_model=EventListItem)

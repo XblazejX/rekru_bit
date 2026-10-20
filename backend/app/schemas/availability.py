@@ -5,7 +5,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class AvailabilitySetRequest(BaseModel):
     """Zestaw slotów wysyłany przez użytkownika (zastępuje lub aktualizuje jego dostępność)."""
-    slot_starts: list[datetime] = Field(..., description="Lista znaczników czasu rozpoczęcia slotów w UTC/ISO")
+    slot_starts: list[datetime] = Field(
+        ...,
+        max_length=5000,
+        description="Początki 30-minutowych pól dostępności w formacie ISO 8601",
+    )
 
 
 class AvailabilitySlotResponse(BaseModel):
