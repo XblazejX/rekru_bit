@@ -1,77 +1,162 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../App';
+import type { AuthResponse, User } from '../api';
 
-describe('App Component', () => {
+const sampleUser: User = {
+  id: 7,
+  first_name: 'Anna',
+  last_name: 'Nowak',
+  email: 'anna@example.com',
+  is_active: true,
+  notify_on_events: true,
+  theme: 'dark',
+  created_at: '2026-10-20T10:00:00Z',
+};
+
+const authResponse: AuthResponse = {
+  access_token: 'test-access-token',
+  token_type: 'bearer',
+  user: sampleUser,
+};
+
+function response(body: unknown, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+  } as Response;
+}
+
+function mockFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>) {
+  return vi.spyOn(global, 'fetch').mockImplementation((input, init) =>
+    Promise.resolve(handler(input.toString(), init)),
+  );
+}
+
+describe('Bit2Meet authentication UI', () => {
   beforeEach(() => {
-    vi.resetAllMocks();
+    localStorage.clear();
+    sessionStorage.clear();
+    document.documentElement.removeAttribute('data-theme');
+    vi.restoreAllMocks();
   });
 
-  it('renders application title and initial layout', async () => {
-    // Mock fetch for health endpoints
-    vi.spyOn(global, 'fetch').mockImplementation((url: RequestInfo | URL) => {
-      const urlStr = url.toString();
-      if (urlStr.includes('/api/health/db')) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({ status: 'ok', database: 'connected' }),
-        } as Response);
+  it('registers an account, verifies its email and opens the profile', async () => {
+    let registrationBody: Record<string, unknown> | undefined;
+    let verificationBody: Record<string, unknown> | undefined;
+    mockFetch((url, init) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      if (url.endsWith('/auth/register')) {
+        registrationBody = body;
+        return response({ message: 'Kod wysłany.' }, 202);
       }
-      if (urlStr.includes('/api/health')) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({ status: 'ok', app: 'Bit2Meet', environment: 'development' }),
-        } as Response);
+      if (url.endsWith('/auth/verify')) {
+        verificationBody = body;
+        return response(authResponse);
       }
-      return Promise.reject(new Error('Unknown url'));
+      throw new Error(`Unexpected request: ${url}`);
     });
 
     render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Utwórz konto' }));
 
-    expect(screen.getByText('Bit2Meet')).toBeInTheDocument();
-    expect(screen.getByText('Koordynator terminów (BIT Web)')).toBeInTheDocument();
-    expect(screen.getByText('Stan środowiska — Etap 1')).toBeInTheDocument();
-
-    await waitFor(() => {
-      expect(screen.getByText('Działa (ok)')).toBeInTheDocument();
-      expect(screen.getByText('Aktywne')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Imię'), { target: { value: 'Anna' } });
+    fireEvent.change(screen.getByLabelText('Nazwisko'), { target: { value: 'Nowak' } });
+    fireEvent.change(screen.getByLabelText('Adres e-mail'), {
+      target: { value: 'ANNA@example.com' },
     });
+    fireEvent.change(screen.getByLabelText(/^Hasło/), { target: { value: 'SilneHaslo123!' } });
+    fireEvent.change(screen.getByLabelText('Powtórz hasło'), {
+      target: { value: 'SilneHaslo123!' },
+    });
+    fireEvent.click(screen.getByLabelText('Nie, dziękuję'));
+    fireEvent.click(screen.getByRole('button', { name: /utwórz konto/i }));
+
+    expect(await screen.findByRole('heading', { name: 'Sprawdź swoją pocztę' })).toBeInTheDocument();
+    expect(registrationBody).toMatchObject({
+      first_name: 'Anna',
+      last_name: 'Nowak',
+      email: 'anna@example.com',
+      notify_on_events: false,
+    });
+
+    fireEvent.change(screen.getByLabelText('Kod weryfikacyjny'), {
+      target: { value: '123456' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /potwierdź adres/i }));
+
+    expect(await screen.findByText('Twoje konto Bit2Meet jest gotowe do użycia.')).toBeInTheDocument();
+    expect(verificationBody).toEqual({ email: 'anna@example.com', code: '123456' });
+    expect(localStorage.getItem('bit2meet.accessToken')).toBe('test-access-token');
   });
 
-  it('toggles theme when button is clicked', async () => {
-    vi.spyOn(global, 'fetch').mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ status: 'ok', app: 'Bit2Meet', environment: 'development' }),
-    } as Response);
+  it('logs in, saves notification preferences and persists theme', async () => {
+    const calls: Array<{ url: string; method: string; body?: Record<string, unknown> }> = [];
+    mockFetch((url, init) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      calls.push({ url, method: init?.method ?? 'GET', body });
+      if (url.endsWith('/auth/login')) return response(authResponse);
+      if (url.endsWith('/auth/me')) {
+        return response({ ...sampleUser, notify_on_events: false, theme: 'light' });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
 
     render(<App />);
-    const themeBtn = screen.getByRole('button', { name: /przełącz motyw/i });
-    expect(themeBtn).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Adres e-mail'), {
+      target: { value: 'anna@example.com' },
+    });
+    fireEvent.change(screen.getByLabelText('Hasło'), { target: { value: 'SilneHaslo123!' } });
+    fireEvent.click(screen.getByRole('button', { name: /zaloguj się/i }));
 
-    // Default dark theme
-    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    expect(await screen.findByText('Cześć, Anna.')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Nie'));
+    fireEvent.click(screen.getByRole('button', { name: /zapisz preferencję/i }));
+    await waitFor(() => expect(calls.some((call) => call.method === 'PATCH')).toBe(true));
 
-    // Click to toggle to light
-    fireEvent.click(themeBtn);
+    fireEvent.click(screen.getByRole('button', { name: 'Przełącz motyw' }));
+    await waitFor(() => expect(localStorage.getItem('bit2meet.theme')).toBe('light'));
     expect(document.documentElement.getAttribute('data-theme')).toBe('light');
-
-    // Click again to toggle back to dark
-    fireEvent.click(themeBtn);
-    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
-
-    await waitFor(() => {
-      expect(screen.getByText('Działa (ok)')).toBeInTheDocument();
-    });
   });
 
-  it('handles API connection error gracefully', async () => {
-    vi.spyOn(global, 'fetch').mockRejectedValue(new Error('Failed to fetch'));
+  it('requests a reset code and submits matching new passwords', async () => {
+    const resetBodies: Array<Record<string, unknown>> = [];
+    mockFetch((url, init) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      if (url.endsWith('/auth/forgot-password')) return response({ message: 'Jeśli konto istnieje, wysłaliśmy instrukcję resetu hasła.' }, 202);
+      if (url.endsWith('/auth/reset-password')) {
+        resetBodies.push(body);
+        return response({ message: 'Hasło zostało zmienione.' });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
 
     render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /nie pamiętasz hasła/i }));
+    fireEvent.change(screen.getByLabelText('Adres e-mail'), {
+      target: { value: 'anna@example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /wyślij kod/i }));
 
-    await waitFor(() => {
-      expect(screen.getByText(/błąd połączenia/i)).toBeInTheDocument();
-      expect(screen.getByText('Brak odpowiedzi')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Zmień hasło' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Kod z wiadomości'), {
+      target: { value: '654321' },
+    });
+    fireEvent.change(screen.getByLabelText(/^Nowe hasło/), {
+      target: { value: 'NoweSilneHaslo123!' },
+    });
+    fireEvent.change(screen.getByLabelText('Powtórz nowe hasło'), {
+      target: { value: 'NoweSilneHaslo123!' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /zapisz nowe hasło/i }));
+
+    expect(await screen.findByRole('heading', { name: 'Zaloguj się' })).toBeInTheDocument();
+    expect(resetBodies[0]).toEqual({
+      email: 'anna@example.com',
+      code: '654321',
+      new_password: 'NoweSilneHaslo123!',
+      confirm_new_password: 'NoweSilneHaslo123!',
     });
   });
 });
