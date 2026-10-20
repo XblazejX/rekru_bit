@@ -11,14 +11,17 @@ import {
   LogOut,
   Mail,
   Moon,
+  Copy,
+  Plus,
   ShieldCheck,
   Sun,
   UserRound,
+  Users,
 } from 'lucide-react';
-import { authRequest, AuthResponse, tokenStorage, updateProfile, User } from './api';
+import { authRequest, AuthResponse, eventRequest, EventItem, tokenStorage, updateProfile, User } from './api';
 import './styles/auth.css';
 
-type Screen = 'login' | 'register' | 'verify' | 'forgot' | 'reset' | 'dashboard';
+type Screen = 'login' | 'register' | 'verify' | 'forgot' | 'reset' | 'dashboard' | 'event';
 type Theme = 'dark' | 'light';
 
 const FLOW_KEY = 'bit2meet.authFlow';
@@ -36,6 +39,7 @@ function getInitialFlow(): { screen: Screen; email: string } {
   } catch {
     sessionStorage.removeItem(FLOW_KEY);
   }
+  if (sharedEventFromPath()) return { screen: 'event', email: '' };
   return { screen: 'login', email: '' };
 }
 
@@ -52,6 +56,11 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : 'Coś poszło nie tak. Spróbuj ponownie.';
 }
 
+function sharedEventFromPath(): string | null {
+  const match = window.location.pathname.match(/^\/events\/([A-Za-z0-9_-]+)\/?$/);
+  return match?.[1] ?? null;
+}
+
 export const App = () => {
   const initialFlow = getInitialFlow();
   const [screen, setScreen] = useState<Screen>(initialFlow.screen);
@@ -61,6 +70,14 @@ export const App = () => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [events, setEvents] = useState<EventItem[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [showEventForm, setShowEventForm] = useState(false);
+  const [sharedEventId] = useState(sharedEventFromPath);
+  const [sharedEvent, setSharedEvent] = useState<EventItem | null>(null);
+  const [sharedEventLoading, setSharedEventLoading] = useState(Boolean(sharedEventId));
+  const [isMember, setIsMember] = useState(false);
+  const [joinAfterLogin, setJoinAfterLogin] = useState(false);
 
   const showScreen = useCallback((next: Screen, nextEmail = email) => {
     setError('');
@@ -87,7 +104,7 @@ export const App = () => {
         if (cancelled) return;
         setUser(profile);
         setTheme(profile.theme);
-        setScreen('dashboard');
+        setScreen(sharedEventId ? 'event' : 'dashboard');
       })
       .catch(() => {
         tokenStorage.clear();
@@ -95,7 +112,56 @@ export const App = () => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sharedEventId]);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    setEventsLoading(true);
+    eventRequest<EventItem[]>('', 'GET')
+      .then((items) => { if (!cancelled) setEvents(items); })
+      .catch((requestError) => { if (!cancelled) setError(errorText(requestError)); })
+      .finally(() => { if (!cancelled) setEventsLoading(false); });
+    return () => { cancelled = true; };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!sharedEventId) return;
+    let cancelled = false;
+    eventRequest<EventItem>(`/${sharedEventId}`, 'GET', undefined, false)
+      .then((event) => { if (!cancelled) setSharedEvent(event); })
+      .catch((requestError) => { if (!cancelled) setError(errorText(requestError)); })
+      .finally(() => { if (!cancelled) setSharedEventLoading(false); });
+    return () => { cancelled = true; };
+  }, [sharedEventId]);
+
+  useEffect(() => {
+    if (!sharedEventId || !user || joinAfterLogin) return;
+    let cancelled = false;
+    eventRequest<{ is_member: boolean }>(`/${sharedEventId}/membership`)
+      .then((result) => { if (!cancelled) setIsMember(result.is_member); })
+      .catch((requestError) => { if (!cancelled) setError(errorText(requestError)); });
+    return () => { cancelled = true; };
+  }, [sharedEventId, user?.id, joinAfterLogin]);
+
+  useEffect(() => {
+    if (!joinAfterLogin || !sharedEvent || !user) return;
+    setBusy(true);
+    eventRequest<EventItem>(`/${sharedEvent.public_id}/join`, 'POST')
+      .then((joined) => {
+        setSharedEvent(joined);
+        setIsMember(true);
+        setEvents((current) => current.some((item) => item.id === joined.id)
+          ? current.map((item) => item.id === joined.id ? joined : item)
+          : [joined, ...current]);
+        setNotice('Dołączono do spotkania.');
+      })
+      .catch((requestError) => setError(errorText(requestError)))
+      .finally(() => {
+        setJoinAfterLogin(false);
+        setBusy(false);
+      });
+  }, [joinAfterLogin, sharedEvent?.public_id, user?.id]);
 
   const finishLogin = (response: AuthResponse) => {
     tokenStorage.set(response.access_token);
@@ -105,7 +171,7 @@ export const App = () => {
     setDocumentTheme(response.user.theme);
     setError('');
     setNotice('');
-    setScreen('dashboard');
+    setScreen(sharedEventId ? 'event' : 'dashboard');
   };
 
   const handleRegister = async (event: FormEvent<HTMLFormElement>) => {
@@ -263,6 +329,64 @@ export const App = () => {
     showScreen('login');
   };
 
+  const handleCreateEvent = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const created = await eventRequest<EventItem>('', 'POST', {
+        title: String(data.get('title')).trim(),
+        description: String(data.get('description')).trim() || null,
+      });
+      setEvents((current) => [created, ...current]);
+      setShowEventForm(false);
+      setNotice('Wydarzenie zostało utworzone. Udostępnij link uczestnikom.');
+    } catch (requestError) {
+      setError(errorText(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleJoinEvent = async () => {
+    if (!sharedEvent) return;
+    if (!user) {
+      setJoinAfterLogin(true);
+      showScreen('login');
+      setNotice('Zaloguj się lub utwórz konto. Po uwierzytelnieniu wrócisz do spotkania.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      const joined = await eventRequest<EventItem>(`/${sharedEvent.public_id}/join`, 'POST');
+      setSharedEvent(joined);
+      setIsMember(true);
+      setEvents((current) => current.some((item) => item.id === joined.id)
+        ? current.map((item) => item.id === joined.id ? joined : item)
+        : [joined, ...current]);
+      setNotice('Dołączono do wydarzenia. Możesz teraz uzupełnić swoją dostępność.');
+    } catch (requestError) {
+      setError(errorText(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCopyEventLink = async (publicId: string) => {
+    const link = `${window.location.origin}/events/${publicId}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      setNotice('Link do wydarzenia skopiowany.');
+      setError('');
+    } catch {
+      setError(`Skopiuj link do wydarzenia: ${link}`);
+      setNotice('');
+    }
+  };
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -312,14 +436,75 @@ export const App = () => {
             </form>
           </section>
 
-          <section className="dashboard-card events-empty">
-            <div className="empty-calendar"><CalendarDays size={25} /></div>
-            <h2>Twoje wydarzenia pojawią się tutaj</h2>
-            <p>Za chwilę dodamy tworzenie wydarzeń i wspólną siatkę dostępności.</p>
+          <section className="events-section">
+            <div className="events-section-heading">
+              <div><div className="form-kicker">PLANOWANIE SPOTKAŃ</div><h2>Twoje wydarzenia</h2></div>
+              <button className="button button-primary button-small" onClick={() => setShowEventForm((value) => !value)}>
+                {showEventForm ? <ArrowLeft size={15} /> : <Plus size={16} />}{showEventForm ? 'Wróć' : 'Nowe wydarzenie'}
+              </button>
+            </div>
+
+            {showEventForm && <form className="dashboard-card event-form" onSubmit={handleCreateEvent}>
+              <Field label="Nazwa wydarzenia"><input name="title" minLength={3} maxLength={100} placeholder="Np. Spotkanie zespołu" required /></Field>
+              <Field label="Opis (opcjonalnie)"><textarea name="description" maxLength={1000} rows={3} placeholder="Dodaj kilka informacji dla uczestników" /></Field>
+              <p className="form-help">Po utworzeniu spotkania uczestnicy wybiorą dni i zaznaczą dostępne godziny.</p>
+              <button className="button button-primary submit-button" type="submit" disabled={busy}>{busy ? 'Tworzenie…' : 'Utwórz wydarzenie'} <ArrowRight size={16} /></button>
+            </form>}
+
+            {eventsLoading ? <div className="dashboard-card events-empty"><LoaderCircle className="spin" size={22} /><p>Ładowanie wydarzeń…</p></div>
+              : events.length === 0 ? <div className="dashboard-card events-empty">
+                <div className="empty-calendar"><CalendarDays size={25} /></div><h2>Nie masz jeszcze wydarzeń</h2>
+                <p>Utwórz wydarzenie i udostępnij link, żeby wspólnie znaleźć dogodny termin.</p>
+              </div>
+              : <div className="event-list">{events.map((item) => <article className="dashboard-card event-card" key={item.id}>
+                <div className="event-card-top"><div><h3><a href={`/events/${item.public_id}`}>{item.title}</a></h3><p>{item.description || 'Bez opisu'}</p></div>
+                  {item.is_owner && <span className="owner-badge">Twórca</span>}</div>
+                <div className="event-card-bottom"><span><Users size={15} /> {item.participants_count} {item.participants_count === 1 ? 'uczestnik' : 'uczestników'}</span>
+                  {item.final_slot_start ? <strong className="event-final">Termin ustalony</strong> : <span>Wybór dostępności</span>}
+                  <button className="button button-secondary button-small" onClick={() => handleCopyEventLink(item.public_id)}><Copy size={14} /> Kopiuj link</button>
+                </div>
+              </article>)}</div>}
           </section>
 
           {(error || notice) && <Feedback error={error} notice={notice} />}
           <button className="logout-button" onClick={handleLogout}><LogOut size={16} /> Wyloguj się</button>
+        </main>
+      ) : screen === 'event' ? (
+        <main className="event-page">
+          <button className="back-link event-back" onClick={() => {
+            if (user) {
+              window.history.replaceState({}, '', '/');
+              setScreen('dashboard');
+            } else showScreen('login');
+          }}>
+            <ArrowLeft size={16} /> {user ? 'Moje wydarzenia' : 'Przejdź do logowania'}
+          </button>
+          {sharedEventLoading ? <section className="dashboard-card events-empty"><LoaderCircle className="spin" size={24} /><p>Wczytujemy spotkanie…</p></section>
+            : !sharedEvent ? <section className="dashboard-card events-empty">
+              <div className="empty-calendar"><CalendarDays size={25} /></div><h2>Nie znaleźliśmy tego spotkania</h2>
+              <p>Sprawdź, czy link jest kompletny i spróbuj ponownie.</p>
+              {error && <Feedback error={error} notice="" />}
+            </section>
+            : <>
+              <div className="event-detail-kicker"><span className="status-dot" /> SPOTKANIE BIT2MEET</div>
+              <section className="dashboard-card event-detail-card">
+                <div className="event-detail-heading">
+                  <div className="section-icon"><CalendarDays size={20} /></div>
+                  <span className="owner-badge"><Users size={13} /> {sharedEvent.participants_count} {sharedEvent.participants_count === 1 ? 'uczestnik' : 'uczestników'}</span>
+                </div>
+                <h1>{sharedEvent.title}</h1>
+                <p className="event-description">{sharedEvent.description || 'Organizator nie dodał opisu spotkania.'}</p>
+                <div className="event-detail-divider" />
+                <h2>Wybierzcie wspólny termin</h2>
+                <p className="form-intro">Dołącz do spotkania, a potem zaznacz dni i godziny, w których możesz się spotkać. Swoją dostępność będzie można zmienić w każdej chwili.</p>
+                {!user ? <button className="button button-primary submit-button" onClick={handleJoinEvent}>
+                  Dołącz do spotkania <ArrowRight size={17} />
+                </button> : isMember ? <div className="event-joined"><Check size={16} /> Jesteś uczestnikiem tego spotkania.</div> : <button className="button button-primary submit-button" onClick={handleJoinEvent} disabled={busy}>
+                  {busy ? 'Dołączanie…' : 'Dołącz do spotkania'} <ArrowRight size={17} />
+                </button>}
+                {(error || notice) && <Feedback error={error} notice={notice} />}
+              </section>
+            </>}
         </main>
       ) : (
         <main className="auth-page">
@@ -343,7 +528,9 @@ export const App = () => {
               {screen === 'login' && <>
                 <div className="form-kicker">WITAMY PONOWNIE</div>
                 <h2>Zaloguj się</h2>
-                <p className="form-intro">Zaloguj się, aby przejść do swojego konta.</p>
+                <p className="form-intro">{sharedEvent
+                  ? <>Zaloguj się, aby dołączyć do wydarzenia <strong>{sharedEvent.title}</strong>.</>
+                  : 'Zaloguj się, aby przejść do swojego konta.'}</p>
                 <Feedback error={error} notice={notice} />
                 <form className="auth-form" onSubmit={handleLogin}>
                   <Field label="Adres e-mail" icon={<Mail size={17} />}><input name="email" type="email" autoComplete="email" placeholder="ty@przyklad.pl" required /></Field>

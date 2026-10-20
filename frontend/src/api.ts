@@ -15,6 +15,20 @@ export interface AuthResponse {
   user: User;
 }
 
+export interface EventItem {
+  id: number;
+  title: string;
+  description: string | null;
+  public_id: string;
+  final_slot_start: string | null;
+  final_slot_end: string | null;
+  created_at: string;
+  participants_count: number;
+  messages_count: number;
+  is_owner: boolean;
+  is_member: boolean;
+}
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 const TOKEN_KEY = 'bit2meet.accessToken';
 
@@ -79,6 +93,34 @@ export async function updateProfile<T>(changes: unknown): Promise<T> {
   } catch {
     throw new Error('Nie można połączyć się z serwerem. Sprawdź, czy aplikacja działa.');
   }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(errorMessage(payload.detail));
+  return payload as T;
+}
+
+export async function eventRequest<T>(
+  endpoint: string,
+  method = 'GET',
+  body?: unknown,
+  authenticated = true,
+): Promise<T> {
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const token = authenticated ? tokenStorage.get() : null;
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/events${endpoint}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    throw new Error('Nie można połączyć się z serwerem. Sprawdź, czy aplikacja działa.');
+  }
+
+  if (response.status === 204) return undefined as T;
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(errorMessage(payload.detail));
   return payload as T;

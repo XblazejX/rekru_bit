@@ -32,9 +32,9 @@ class Event(Base, TimestampMixin):
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
-    # Zakres dat wydarzenia i interwał siatki
-    start_date: Mapped[date] = mapped_column(Date, nullable=False)
-    end_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # Nullable legacy fields; participants will define the available days themselves.
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
     slot_minutes: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
 
     # Finalny wybrany termin spotkania (ustalany przez twórcę)

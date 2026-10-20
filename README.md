@@ -86,6 +86,16 @@ Endpointy są dostępne pod prefiksem `/api/auth`:
 
 Domyślnie `EMAIL_MODE=mock`: kod jest wypisywany w logach API, co pozwala uruchomić projekt bez konta pocztowego. Dla SMTP ustaw `EMAIL_MODE=smtp` oraz `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` i `SMTP_FROM` w lokalnym `.env`. Nie umieszczaj haseł ani kluczy pocztowych w repozytorium.
 
+### Spotkania i linki
+
+- `POST /api/events` — utworzenie spotkania (nazwa i opis; dni oraz godziny wybierają uczestnicy).
+- `GET /api/events` — lista spotkań zalogowanego użytkownika.
+- `GET /api/events/{public_id}` — publiczne szczegóły spotkania dostępne z linku.
+- `POST /api/events/{public_id}/join` — dołączenie do spotkania po zalogowaniu.
+- `GET /api/events/{public_id}/membership` — sprawdzenie członkostwa.
+
+Link udostępniony uczestnikom otwiera stronę konkretnego spotkania. Konto jest wymagane do dołączenia; po logowaniu lub rejestracji użytkownik wraca do spotkania i zostaje do niego dodany.
+
 ---
 
 ## 4. Uruchomienie lokalne (Development)
