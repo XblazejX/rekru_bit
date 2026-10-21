@@ -10,16 +10,19 @@ import {
   LockKeyhole,
   LogOut,
   Mail,
+  MessageCircle,
   Moon,
   Copy,
   Plus,
   ShieldCheck,
   Sun,
+  Trash2,
   UserRound,
   Users,
 } from 'lucide-react';
 import { authRequest, AuthResponse, eventRequest, EventItem, tokenStorage, updateProfile, User } from './api';
 import AvailabilityGrid from './AvailabilityGrid';
+import EventChat from './EventChat';
 import './styles/auth.css';
 
 type Screen = 'login' | 'register' | 'verify' | 'forgot' | 'reset' | 'dashboard' | 'event';
@@ -80,6 +83,13 @@ export const App = () => {
   const [isMember, setIsMember] = useState(false);
   const [joinAfterLogin, setJoinAfterLogin] = useState(false);
 
+  const handleMessageCountChange = useCallback((count: number) => {
+    setSharedEvent((current) => current ? { ...current, messages_count: count, unread_count: 0 } : current);
+    setEvents((current) => current.map((item) => item.public_id === sharedEventId
+      ? { ...item, messages_count: count, unread_count: 0 }
+      : item));
+  }, [sharedEventId]);
+
   const showScreen = useCallback((next: Screen, nextEmail = email) => {
     setError('');
     setNotice('');
@@ -116,15 +126,22 @@ export const App = () => {
   }, [sharedEventId]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || screen !== 'dashboard') return;
     let cancelled = false;
-    setEventsLoading(true);
-    eventRequest<EventItem[]>('', 'GET')
-      .then((items) => { if (!cancelled) setEvents(items); })
-      .catch((requestError) => { if (!cancelled) setError(errorText(requestError)); })
-      .finally(() => { if (!cancelled) setEventsLoading(false); });
-    return () => { cancelled = true; };
-  }, [user?.id]);
+    const refreshEvents = (initial = false) => {
+      if (initial) setEventsLoading(true);
+      eventRequest<EventItem[]>('', 'GET')
+        .then((items) => { if (!cancelled) setEvents(items); })
+        .catch((requestError) => { if (!cancelled) setError(errorText(requestError)); })
+        .finally(() => { if (!cancelled && initial) setEventsLoading(false); });
+    };
+    refreshEvents(true);
+    const timer = window.setInterval(() => refreshEvents(), 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [user?.id, screen]);
 
   useEffect(() => {
     if (!sharedEventId) return;
@@ -139,8 +156,13 @@ export const App = () => {
   useEffect(() => {
     if (!sharedEventId || !user || joinAfterLogin) return;
     let cancelled = false;
-    eventRequest<{ is_member: boolean }>(`/${sharedEventId}/membership`)
-      .then((result) => { if (!cancelled) setIsMember(result.is_member); })
+    eventRequest<{ is_member: boolean; is_owner: boolean }>(`/${sharedEventId}/membership`)
+      .then((result) => {
+        if (!cancelled) {
+          setIsMember(result.is_member);
+          setSharedEvent((current) => current ? { ...current, is_owner: result.is_owner, is_member: result.is_member } : current);
+        }
+      })
       .catch((requestError) => { if (!cancelled) setError(errorText(requestError)); });
     return () => { cancelled = true; };
   }, [sharedEventId, user?.id, joinAfterLogin]);
@@ -376,6 +398,46 @@ export const App = () => {
     }
   };
 
+  const handleDeleteEvent = async (target: EventItem | null = sharedEvent) => {
+    if (!target || !window.confirm(`Usunąć wydarzenie „${target.title}”? Tej operacji nie można cofnąć.`)) return;
+    setBusy(true);
+    setError('');
+    try {
+      await eventRequest<void>(`/${target.public_id}`, 'DELETE');
+      setEvents((current) => current.filter((item) => item.id !== target.id));
+      if (sharedEvent?.id === target.id) {
+        setSharedEvent(null);
+        setIsMember(false);
+        window.history.replaceState({}, '', '/');
+        setScreen('dashboard');
+      }
+      setNotice('Wydarzenie zostało usunięte.');
+    } catch (requestError) {
+      setError(errorText(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleLeaveEvent = async (target: EventItem | null = sharedEvent) => {
+    if (!target || !window.confirm(`Opuścić wydarzenie „${target.title}”?`)) return;
+    setBusy(true);
+    setError('');
+    try {
+      await eventRequest<void>(`/${target.public_id}/leave`, 'POST');
+      setEvents((current) => current.filter((item) => item.id !== target.id));
+      if (sharedEvent?.id === target.id) {
+        setIsMember(false);
+        setSharedEvent((current) => current ? { ...current, is_member: false } : current);
+      }
+      setNotice('Opuszczono wydarzenie.');
+    } catch (requestError) {
+      setError(errorText(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleCopyEventLink = async (publicId: string) => {
     const link = `${window.location.origin}/events/${publicId}`;
     try {
@@ -459,9 +521,15 @@ export const App = () => {
               </div>
               : <div className="event-list">{events.map((item) => <article className="dashboard-card event-card" key={item.id}>
                 <div className="event-card-top"><div><h3><a href={`/events/${item.public_id}`}>{item.title}</a></h3><p>{item.description || 'Bez opisu'}</p></div>
-                  {item.is_owner && <span className="owner-badge">Twórca</span>}</div>
+                  <div className="event-owner-actions">{item.is_owner && <span className="owner-badge">Twórca</span>}
+                    {item.is_owner
+                      ? <button type="button" className="event-manage-button" aria-label="Usuń wydarzenie" title="Usuń wydarzenie" disabled={busy} onClick={() => void handleDeleteEvent(item)}><Trash2 size={15} /></button>
+                      : <button type="button" className="event-manage-button" aria-label="Opuść wydarzenie" title="Opuść wydarzenie" disabled={busy} onClick={() => void handleLeaveEvent(item)}><LogOut size={15} /></button>}
+                  </div>
+                </div>
                 <div className="event-card-bottom"><span><Users size={15} /> {item.participants_count} {item.participants_count === 1 ? 'uczestnik' : 'uczestników'}</span>
-                  {item.final_slot_start ? <strong className="event-final">Termin ustalony</strong> : <span>Wybór dostępności</span>}
+                  <span>Wybór dostępności</span>
+                  {item.unread_count > 0 && <span className="event-message-count" title={`${item.unread_count} nieprzeczytanych wiadomości`}><MessageCircle size={15} /> {item.unread_count}</span>}
                   <button className="button button-secondary button-small" onClick={() => handleCopyEventLink(item.public_id)}><Copy size={14} /> Kopiuj link</button>
                 </div>
               </article>)}</div>}
@@ -493,13 +561,20 @@ export const App = () => {
                   <p>{sharedEvent.description || 'Organizator nie dodał opisu spotkania.'}</p>
                 </div>
                 <div className="event-overview-actions">
+                  {user && isMember && sharedEvent.is_owner && <button className="button button-secondary button-small" onClick={() => void handleDeleteEvent()} disabled={busy}><Trash2 size={15} /> Usuń wydarzenie</button>}
+                  {user && isMember && !sharedEvent.is_owner && <button className="button button-secondary button-small" onClick={() => void handleLeaveEvent()} disabled={busy}><LogOut size={15} /> Opuść wydarzenie</button>}
                   {!isMember && <button className="button button-primary" onClick={handleJoinEvent} disabled={busy}>
                     {busy ? 'Dołączanie…' : 'Dołącz do spotkania'} <ArrowRight size={17} />
                   </button>}
                 </div>
               </section>
               {(error || notice) && <Feedback error={error} notice={notice} />}
-              {user && isMember && <AvailabilityGrid publicId={sharedEvent.public_id} />}
+              {user && isMember && <>
+                <div className="event-workspace">
+                  <AvailabilityGrid publicId={sharedEvent.public_id} />
+                  <EventChat publicId={sharedEvent.public_id} userId={user.id} unreadCount={sharedEvent.unread_count} onCountChange={handleMessageCountChange} />
+                </div>
+              </>}
             </>}
         </main>
       ) : (

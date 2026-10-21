@@ -169,13 +169,16 @@ input[type="radio"] { width: 15px; height: 15px; margin: 0; accent-color: var(--
 .event-card-top h3 a { color: inherit; }
 .event-card-top h3 a:hover { color: var(--accent); text-decoration: none; }
 .event-card-top p, .event-description { margin-top: 5px; color: var(--text-muted); font-size: .76rem; line-height: 1.5; white-space: pre-wrap; }
+.event-owner-actions { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; }
+.event-manage-button { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-muted); background: var(--surface); }
+.event-manage-button:hover:not(:disabled) { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.event-manage-button:disabled { opacity: .5; }
 .owner-badge { flex: 0 0 auto; padding: 5px 9px; border-radius: var(--radius-full); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); font-size: .66rem; font-weight: 650; }
 .event-meta { display: flex; align-items: center; gap: 7px; margin-top: 15px; color: var(--text-muted); font-size: .73rem; }
 .event-meta svg, .event-card-bottom svg { color: var(--accent); }
 .event-card-bottom { display: flex; align-items: center; gap: 13px; flex-wrap: wrap; padding-top: 14px; margin-top: 14px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: .7rem; }
 .event-card-bottom > span { display: inline-flex; align-items: center; gap: 6px; }
 .event-card-bottom .button { margin-left: auto; }
-.event-final, .event-joined { display: inline-flex; align-items: center; gap: 6px; color: var(--success); font-size: .7rem; font-weight: 650; }
 .invite-card .event-description { margin: 17px 0 0; }
 .invite-card .button { margin-top: 16px; }
 .invite-card .event-joined { margin-top: 16px; }

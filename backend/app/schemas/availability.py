@@ -10,6 +10,7 @@ class AvailabilitySetRequest(BaseModel):
         max_length=5000,
         description="Początki 30-minutowych pól dostępności w formacie ISO 8601",
     )
+    slot_notes: dict[str, str] = Field(default_factory=dict, max_length=5000)
 
 
 class AvailabilitySlotResponse(BaseModel):
@@ -19,6 +20,14 @@ class AvailabilitySlotResponse(BaseModel):
     event_id: int
     user_id: int
     slot_start: datetime
+    note: str
+
+
+class AvailabilityNoteResponse(BaseModel):
+    slot_start: datetime
+    user_id: int
+    user_name: str
+    note: str
 
 
 class SlotAggregateItem(BaseModel):

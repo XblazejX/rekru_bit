@@ -1,8 +1,8 @@
 import secrets
-from datetime import date, datetime
+from datetime import date
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Date, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
@@ -36,14 +36,6 @@ class Event(Base, TimestampMixin):
     start_date: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
     slot_minutes: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
-
-    # Finalny wybrany termin spotkania (ustalany przez twórcę)
-    final_slot_start: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    final_slot_end: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
 
     # Relacje
     owner: Mapped["User"] = relationship("User", back_populates="owned_events")

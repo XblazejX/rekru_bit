@@ -1,5 +1,5 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Clock3, LoaderCircle, Save, Trash2, X } from 'lucide-react';
+import { FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight, Clock3, LoaderCircle, MessageCircle, Trash2, X } from 'lucide-react';
 import { eventRequest } from './api';
 import './styles/availability.css';
 
@@ -18,9 +18,15 @@ interface AvailabilitySlot {
   event_id: number;
   user_id: number;
   slot_start: string;
+  note: string;
 }
 
-type ViewMode = 'today' | 'tomorrow' | 'week' | 'day';
+interface AvailabilityNote {
+  slot_start: string;
+  user_id: number;
+  user_name: string;
+  note: string;
+}
 
 const SLOT_COUNT = 48;
 const HEADER_HEIGHT = 42;
@@ -75,6 +81,15 @@ function sameSlots(first: Set<string>, second: Set<string>): boolean {
   return first.size === second.size && [...first].every((slot) => second.has(slot));
 }
 
+function sameNotes(first: Map<string, string>, second: Map<string, string>): boolean {
+  const normalized = (value: Map<string, string>) => new Map(
+    [...value].filter(([, note]) => note.trim()).map(([key, note]) => [key, note.trim()]),
+  );
+  const firstNotes = normalized(first);
+  const secondNotes = normalized(second);
+  return firstNotes.size === secondNotes.size && [...firstNotes].every(([key, note]) => secondNotes.get(key) === note);
+}
+
 function parseSlotTime(value: string, allowEndOfDay = false): number | null {
   if (allowEndOfDay && value === '24:00') return SLOT_COUNT;
   const match = /^(\d{2}):(00|30)$/.exec(value);
@@ -95,11 +110,13 @@ function normalizeHourInput(value: string, allowEndOfDay = false): string | null
 }
 
 export default function AvailabilityGrid({ publicId }: { publicId: string }) {
-  const [view, setView] = useState<ViewMode>('today');
-  const [anchorDate, setAnchorDate] = useState(() => new Date());
+  const [anchorDate, setAnchorDate] = useState(() => mondayOf(new Date()));
   const [selectedDate, setSelectedDate] = useState(() => dateInputValue(new Date()));
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [savedSlots, setSavedSlots] = useState<Set<string>>(() => new Set());
+  const [selectedNotes, setSelectedNotes] = useState<Map<string, string>>(() => new Map());
+  const [savedNotes, setSavedNotes] = useState<Map<string, string>>(() => new Map());
+  const [noteSlots, setNoteSlots] = useState<AvailabilityNote[]>([]);
   const [aggregate, setAggregate] = useState<AvailabilityAggregate | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -109,7 +126,9 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
   const [dialogDate, setDialogDate] = useState<Date | null>(null);
   const [dialogStart, setDialogStart] = useState('09:00');
   const [dialogEnd, setDialogEnd] = useState('10:00');
+  const [dialogNote, setDialogNote] = useState('');
   const [editingBlock, setEditingBlock] = useState<{ start: number; end: number } | null>(null);
+  const [hoverNote, setHoverNote] = useState<{ key: string; left: number; top: number; range: string; notes: Array<{ userName: string; note: string }> } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const jumpAfterRender = useRef(false);
 
@@ -119,13 +138,18 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
     Promise.all([
       eventRequest<AvailabilityAggregate>(`/${publicId}/availability`),
       eventRequest<AvailabilitySlot[]>(`/${publicId}/availability/me`),
+      eventRequest<AvailabilityNote[]>(`/${publicId}/availability/notes`),
     ])
-      .then(([overview, personal]) => {
+      .then(([overview, personal, notes]) => {
         if (cancelled) return;
         const ownSlots = new Set(personal.map((slot) => new Date(slot.slot_start).toISOString()));
+        const ownNotes = new Map(personal.filter((slot) => slot.note).map((slot) => [new Date(slot.slot_start).toISOString(), slot.note]));
         setAggregate(overview);
+        setNoteSlots(notes);
         setSavedSlots(ownSlots);
         setSelected(ownSlots);
+        setSavedNotes(ownNotes);
+        setSelectedNotes(ownNotes);
       })
       .catch((requestError) => {
         if (!cancelled) setError(requestError instanceof Error ? requestError.message : 'Nie udało się wczytać dostępności.');
@@ -140,11 +164,8 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
   }, []);
 
   const dates = useMemo(() => {
-    if (view === 'today') return [new Date()];
-    if (view === 'tomorrow') return [addDays(new Date(), 1)];
-    if (view === 'week') return Array.from({ length: 7 }, (_, index) => addDays(mondayOf(anchorDate), index));
-    return [parseDate(selectedDate)];
-  }, [anchorDate, now, selectedDate, view]);
+    return Array.from({ length: 7 }, (_, index) => addDays(mondayOf(anchorDate), index));
+  }, [anchorDate]);
 
   const aggregateBySlot = useMemo(
     () => new Map((aggregate?.slots ?? []).map((slot) => [new Date(slot.slot_start).toISOString(), slot])),
@@ -152,8 +173,10 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
   );
   const visualBlocks = useMemo(() => {
     const blocks: Array<{ dateIndex: number; start: number; end: number; count?: number; own?: boolean }> = [];
+    const noteBlocks: Array<{ dateIndex: number; start: number; end: number; note: string; userId: number; userName: string }> = [];
     const ownRanges = new Map<string, string>();
     const heatRanges = new Map<string, string>();
+    const noteRanges = new Map<string, string[]>();
     dates.forEach((date, dateIndex) => {
       let heatStart = -1;
       let heatCount = 0;
@@ -186,9 +209,75 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
         }
       }
     });
-    return { blocks, ownRanges, heatRanges };
-  }, [aggregate?.total_participants, aggregateBySlot, dates, savedSlots, selected]);
-  const dirty = !sameSlots(selected, savedSlots);
+    dates.forEach((date, dateIndex) => {
+      const notesForDate = noteSlots.filter((entry) => dateInputValue(new Date(entry.slot_start)) === dateInputValue(date))
+        .map((entry) => ({
+          index: new Date(entry.slot_start).getHours() * 2 + (new Date(entry.slot_start).getMinutes() >= 30 ? 1 : 0),
+          userId: entry.user_id,
+          userName: entry.user_name,
+          note: entry.note,
+        }))
+        .sort((first, second) => first.userId - second.userId || first.index - second.index);
+      let group: typeof notesForDate = [];
+      const flushNotes = () => {
+        if (!group.length) return;
+        const first = group[0];
+        const last = group[group.length - 1];
+        noteBlocks.push({ dateIndex, start: first.index, end: last.index + 1, note: first.note, userId: first.userId, userName: first.userName });
+        for (const entry of group) {
+          const key = slotKey(date, entry.index);
+          noteRanges.set(key, [...(noteRanges.get(key) ?? []), `${entry.userName}: ${entry.note}`]);
+        }
+        group = [];
+      };
+      for (const entry of notesForDate) {
+        const previous = group[group.length - 1];
+        if (previous && (entry.index !== previous.index + 1 || entry.userId !== previous.userId || entry.note !== previous.note)) flushNotes();
+        group.push(entry);
+      }
+      flushNotes();
+    });
+    return { blocks, ownRanges, heatRanges, noteBlocks, noteRanges };
+  }, [aggregate?.total_participants, aggregateBySlot, dates, noteSlots, savedSlots, selected]);
+
+  const showNotePopover = (event: MouseEvent<HTMLButtonElement>, dateIndex: number, slotIndex: number) => {
+    const matches = visualBlocks.noteBlocks.filter((block) => block.dateIndex === dateIndex && slotIndex >= block.start && slotIndex < block.end);
+    if (!matches.length) {
+      setHoverNote(null);
+      return;
+    }
+    const key = matches.map((block) => `${block.userId}:${block.start}:${block.end}`).join('|');
+    // Read the DOM event synchronously. React may run state updater functions
+    // later, when event.currentTarget has already been cleared.
+    const cell = event.currentTarget.getBoundingClientRect();
+    const firstSlot = Math.min(...matches.map((block) => block.start));
+    const lastSlot = Math.max(...matches.map((block) => block.end));
+    const anchor = {
+      left: cell.left,
+      right: cell.right,
+      top: cell.top + (firstSlot - slotIndex) * ROW_HEIGHT,
+    };
+    const width = Math.min(260, window.innerWidth - 24);
+    const height = Math.min(150, 60 + matches.reduce((total, block) => total + Math.min(42, Math.ceil(block.note.length / 34)) * 15 + 16, 0));
+    const rightPosition = anchor.right + 8;
+    const leftPosition = anchor.left - width - 8;
+    const centeredPosition = anchor.left + (anchor.right - anchor.left - width) / 2;
+    const left = rightPosition + width <= window.innerWidth - 12
+      ? rightPosition
+      : leftPosition >= 12
+        ? leftPosition
+        : Math.min(window.innerWidth - width - 12, Math.max(12, centeredPosition));
+    const top = Math.min(window.innerHeight - height - 12, Math.max(12, anchor.top));
+    const nextPopover = {
+      key,
+      left,
+      top,
+      range: `${formatTime(firstSlot)}–${formatTime(lastSlot)}`,
+      notes: matches.map((block) => ({ userName: block.userName, note: block.note })),
+    };
+    setHoverNote((current) => current?.key === key ? current : nextPopover);
+  };
+  const dirty = !sameSlots(selected, savedSlots) || !sameNotes(selectedNotes, savedNotes);
   const todayValue = dateInputValue(now);
   const currentDayIndex = dates.findIndex((date) => dateInputValue(date) === todayValue);
   const nowSlot = now.getHours() * 2 + (now.getMinutes() >= 30 ? 1 : 0);
@@ -210,44 +299,23 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
     if (!jumpAfterRender.current) return;
     jumpAfterRender.current = false;
     scrollToCurrentTime();
-  }, [anchorDate, selectedDate, view]);
+  }, [anchorDate, selectedDate]);
   const firstEditableKey = dates.flatMap((date) =>
     Array.from({ length: SLOT_COUNT }, (_, index) => isPastSlot(date, index, now) ? null : slotKey(date, index)),
   ).find((key): key is string => key !== null);
 
-  const setPreset = (nextView: ViewMode) => {
-    const current = new Date();
-    if (nextView === 'today') {
-      setAnchorDate(current);
-      setSelectedDate(dateInputValue(current));
-    } else if (nextView === 'tomorrow') {
-      const tomorrow = addDays(current, 1);
-      setAnchorDate(tomorrow);
-      setSelectedDate(dateInputValue(tomorrow));
-    } else if (nextView === 'week') {
-      setAnchorDate(mondayOf(current));
-      setSelectedDate(dateInputValue(current));
-    }
-    setView(nextView);
-  };
-
   const changePeriod = (direction: number) => {
-    if (view === 'week') {
-      const next = addDays(anchorDate, direction * 7);
-      setAnchorDate(next);
-      setSelectedDate(dateInputValue(next));
-      return;
-    }
-    const next = addDays(parseDate(selectedDate), direction);
-    setSelectedDate(dateInputValue(next));
+    const next = addDays(anchorDate, direction * 7);
     setAnchorDate(next);
-    setView('day');
+    setSelectedDate(dateInputValue(next));
   };
 
   const jumpToNow = () => {
     if (currentDayIndex < 0) {
       jumpAfterRender.current = true;
-      setPreset('today');
+      const today = new Date();
+      setAnchorDate(mondayOf(today));
+      setSelectedDate(dateInputValue(today));
       return;
     }
     scrollToCurrentTime();
@@ -263,8 +331,10 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
       endIndex = slotIndex + 1;
       while (endIndex < SLOT_COUNT && selected.has(slotKey(date, endIndex))) endIndex += 1;
       setEditingBlock({ start: startIndex, end: endIndex });
+      setDialogNote(selectedNotes.get(key) ?? '');
     } else {
       setEditingBlock(null);
+      setDialogNote('');
     }
     setDialogDate(date);
     setDialogStart(formatTime(startIndex));
@@ -296,18 +366,30 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
       setError('Ten zakres zawiera minioną godzinę. Wybierz przyszły termin.');
       return;
     }
-    setSelected((current) => {
-      const next = new Set(current);
-      if (editingBlock) {
-        for (let index = editingBlock.start; index < editingBlock.end; index += 1) {
-          next.delete(slotKey(dialogDate, index));
-        }
+    const next = new Set(selected);
+    const nextNotes = new Map(selectedNotes);
+    if (editingBlock) {
+      for (let index = editingBlock.start; index < editingBlock.end; index += 1) {
+        const key = slotKey(dialogDate, index);
+        next.delete(key);
+        nextNotes.delete(key);
       }
-      range.forEach((index) => next.add(slotKey(dialogDate, index)));
-      return next;
-    });
+    }
+    range.forEach((index) => next.add(slotKey(dialogDate, index)));
+    let mergedStart = start;
+    let mergedEnd = end;
+    while (mergedStart > 0 && next.has(slotKey(dialogDate, mergedStart - 1))) mergedStart -= 1;
+    while (mergedEnd < SLOT_COUNT && next.has(slotKey(dialogDate, mergedEnd))) mergedEnd += 1;
+    const note = dialogNote.trim();
+    for (let index = mergedStart; index < mergedEnd; index += 1) {
+      const key = slotKey(dialogDate, index);
+      if (note) nextNotes.set(key, note);
+      else nextNotes.delete(key);
+    }
+    setSelected(next);
+    setSelectedNotes(nextNotes);
     setDialogDate(null);
-    setNotice('Dodano blok. Zapisz zmianę, aby pokazać ją uczestnikom.');
+    setNotice('Dodano blok. Zapisuję dostępność…');
     setError('');
   };
 
@@ -318,8 +400,13 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
       for (let slot = editingBlock.start; slot < editingBlock.end; slot += 1) next.delete(slotKey(dialogDate, slot));
       return next;
     });
+    setSelectedNotes((current) => {
+      const next = new Map(current);
+      for (let slot = editingBlock.start; slot < editingBlock.end; slot += 1) next.delete(slotKey(dialogDate, slot));
+      return next;
+    });
     setDialogDate(null);
-    setNotice('Usunięto zaznaczony blok. Zapisz zmianę, aby pokazać ją uczestnikom.');
+    setNotice('Usunięto blok. Zapisuję dostępność…');
   };
 
   const clearVisible = () => {
@@ -327,13 +414,9 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
       Array.from({ length: SLOT_COUNT }, (_, index) => slotKey(date, index)),
     ));
     setSelected((current) => new Set([...current].filter((key) => !visibleKeys.has(key))));
-    setNotice('Wyczyszczono widoczne dni. Zapisz zmianę.');
-  };
-
-  const restoreSaved = () => {
-    setSelected(new Set(savedSlots));
+    setSelectedNotes((current) => new Map([...current].filter(([key]) => !visibleKeys.has(key))));
     setError('');
-    setNotice('Przywrócono zapisane bloki.');
+    setNotice('Wyczyszczono widoczne dni. Zapisuję dostępność…');
   };
 
   const saveAvailability = async () => {
@@ -343,13 +426,18 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
     try {
       const result = await eventRequest<AvailabilitySlot[]>(`/${publicId}/availability/me`, 'PUT', {
         slot_starts: [...selected].sort().map((slot) => new Date(slot).toISOString()),
+        slot_notes: Object.fromEntries([...selectedNotes].filter(([key, note]) => selected.has(key) && note.trim()).map(([key, note]) => [key, note.trim()])),
       });
       const ownSlots = new Set(result.map((slot) => new Date(slot.slot_start).toISOString()));
+      const ownNotes = new Map(result.filter((slot) => slot.note).map((slot) => [new Date(slot.slot_start).toISOString(), slot.note]));
       setSelected(ownSlots);
       setSavedSlots(ownSlots);
+      setSelectedNotes(ownNotes);
+      setSavedNotes(ownNotes);
       const refreshed = await eventRequest<AvailabilityAggregate>(`/${publicId}/availability`);
       setAggregate(refreshed);
-      setNotice('Zapisano dostępność.');
+      setNoteSlots(await eventRequest<AvailabilityNote[]>(`/${publicId}/availability/notes`));
+      setNotice('Dostępność została zapisana.');
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Nie udało się zapisać dostępności.');
     } finally {
@@ -357,19 +445,26 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
     }
   };
 
+  useEffect(() => {
+    if (!dirty || loading || saving || error) return undefined;
+    const timer = window.setTimeout(() => { void saveAvailability(); }, 650);
+    return () => window.clearTimeout(timer);
+  }, [dirty, loading, saving, error, selected, selectedNotes, publicId]);
+
   return (
     <section className="availability-section" aria-label="Kalendarz dostępności">
       <div className="availability-toolbar">
         <div className="availability-presets" role="group" aria-label="Widok kalendarza">
-          <button type="button" className={view === 'today' ? 'active' : ''} onClick={() => setPreset('today')}>Dziś</button>
-          <button type="button" className={view === 'tomorrow' ? 'active' : ''} onClick={() => setPreset('tomorrow')}>Jutro</button>
-          <button type="button" className={view === 'week' ? 'active' : ''} onClick={() => setPreset('week')}>Tydzień</button>
+          <button type="button" className="active" onClick={() => {
+            const today = new Date();
+            setAnchorDate(mondayOf(today));
+            setSelectedDate(dateInputValue(today));
+          }}>Tydzień</button>
         </div>
         <label className="availability-date-picker" aria-label="Wybierz dzień">
           <input type="date" min={todayValue} value={selectedDate} onChange={(event) => {
             setSelectedDate(event.target.value);
-            setAnchorDate(parseDate(event.target.value));
-            setView('day');
+            setAnchorDate(mondayOf(parseDate(event.target.value)));
           }} />
         </label>
         <button type="button" className="availability-now-button" onClick={jumpToNow}><span />Teraz</button>
@@ -378,9 +473,7 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
       <div className="availability-scroll" ref={scrollRef} aria-label="Kalendarz; kliknij godzinę, aby dodać blok dostępności">
         <div className="period-navigation">
           <button type="button" aria-label="Poprzedni dzień lub tydzień" onClick={() => changePeriod(-1)}><ChevronLeft size={17} /></button>
-          <strong>{view === 'week'
-            ? `${formatDate(dates[0], { day: 'numeric', month: 'short' })} – ${formatDate(dates[6], { day: 'numeric', month: 'long', year: 'numeric' })}`
-            : formatDate(dates[0], { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</strong>
+          <strong>{`${formatDate(dates[0], { day: 'numeric', month: 'short' })} – ${formatDate(dates[6], { day: 'numeric', month: 'long', year: 'numeric' })}`}</strong>
           <button type="button" aria-label="Następny dzień lub tydzień" onClick={() => changePeriod(1)}><ChevronRight size={17} /></button>
         </div>
 
@@ -388,17 +481,15 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
           <div className={`availability-matrix ${dates.length > 1 ? 'week-matrix' : 'day-matrix'}`} role="grid" aria-rowcount={SLOT_COUNT + 1} aria-colcount={dates.length + 1}>
             <div className="availability-row availability-header" role="row">
               <div className="availability-time-heading" role="columnheader" />
-              {dates.map((date) => <button type="button" role="columnheader" className="availability-day-heading" key={dateInputValue(date)} onClick={() => {
+              {dates.map((date) => <button type="button" role="columnheader" className={`availability-day-heading${selectedDate === dateInputValue(date) ? ' selected-day' : ''}`} key={dateInputValue(date)} onClick={() => {
                 setSelectedDate(dateInputValue(date));
-                setAnchorDate(date);
-                setView('day');
               }}>
                 <span>{formatDate(date, { weekday: 'short' })}</span><strong>{formatDate(date, { day: 'numeric', month: 'short' })}</strong>
               </button>)}
             </div>
             {Array.from({ length: SLOT_COUNT }, (_, slotIndex) => <div className={`availability-row${slotIndex % 2 === 0 ? ' hour-start' : ''}`} data-slot-index={slotIndex} role="row" key={slotIndex}>
               <div className={`availability-time ${slotIndex % 2 === 0 ? 'hour-mark' : ''}`} role="rowheader">{slotIndex % 2 === 0 ? formatTime(slotIndex) : ''}</div>
-              {dates.map((date) => {
+              {dates.map((date, dateIndex) => {
                 const key = slotKey(date, slotIndex);
                 const aggregateSlot = aggregateBySlot.get(key);
                 const isSelected = selected.has(key);
@@ -412,17 +503,20 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
                 const range = visualBlocks.ownRanges.get(key)
                   ?? visualBlocks.heatRanges.get(key)
                   ?? `${formatTime(slotIndex)}–${formatTime(slotIndex + 1)}`;
+                const notes = visualBlocks.noteRanges.get(key) ?? [];
                 return <div className="availability-cell-wrap" role="gridcell" key={key}>
                   <button
                     type="button"
-                    className={`availability-cell${past ? ' past-slot' : ''}`}
+                    className={`availability-cell${past ? ' past-slot' : ''}${notes.length ? ' has-note' : ''}`}
                     style={{ backgroundColor: 'transparent' }}
                     disabled={past}
                     aria-pressed={isSelected}
-                    aria-label={`${formatDate(date, { weekday: 'long', day: 'numeric', month: 'long' })}, ${formatTime(slotIndex)}. ${count ? `${count} osób dostępnych.` : 'Wolne pole.'} ${isSelected ? 'Twój termin.' : 'Kliknij, aby dodać blok.'}`}
-                    title={`${range} · ${count ? `${count} dostępnych` : 'dodaj termin'}`}
-                    data-hover-range={range}
+                    aria-label={`${formatDate(date, { weekday: 'long', day: 'numeric', month: 'long' })}, ${formatTime(slotIndex)}. ${count ? `${count} osób dostępnych.` : 'Wolne pole.'} ${notes.length ? `Notatka: ${notes.join(' / ')}.` : ''} ${isSelected ? 'Twój termin.' : 'Kliknij, aby dodać blok.'}`}
+                    title={notes.length ? undefined : `${range} · ${count ? `${count} dostępnych` : 'dodaj termin'}`}
+                    data-hover-range={notes.length ? undefined : range}
                     tabIndex={key === firstEditableKey ? 0 : -1}
+                    onMouseEnter={(event) => showNotePopover(event, dateIndex, slotIndex)}
+                    onMouseLeave={() => setHoverNote(null)}
                     onClick={() => openSlotDialog(date, slotIndex)}
                   />
                 </div>;
@@ -446,21 +540,31 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
                 <span style={{ gridColumn: block.dateIndex + 2, ...(block.own ? {} : { backgroundColor: `hsl(${hue} 39% 47% / ${opacity})` }) }} />
               </div>;
             })}
+            {visualBlocks.noteBlocks.map((block) => <div
+              aria-hidden="true"
+              className="availability-block-overlay availability-note-overlay"
+              key={`note-${block.dateIndex}-${block.userId}-${block.start}-${block.end}`}
+              style={{ top: `${HEADER_HEIGHT + block.start * ROW_HEIGHT}px`, height: `${(block.end - block.start) * ROW_HEIGHT}px` }}
+            >
+              <span style={{ gridColumn: block.dateIndex + 2 }}><MessageCircle size={13} /></span>
+            </div>)}
           </div>
         )}
       </div>
 
       <div className="availability-actions">
         <button type="button" className="availability-clear-button" onClick={clearVisible} disabled={loading || saving}><Trash2 size={14} />Wyczyść</button>
-        <div className="availability-save-actions">
-          {dirty && <button type="button" className="button button-secondary button-small" onClick={restoreSaved} disabled={saving}>Cofnij</button>}
-          <button type="button" className="button button-primary button-small" onClick={saveAvailability} disabled={loading || saving || !dirty}>
-            {saving ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}{saving ? 'Zapisywanie…' : 'Zapisz'}
-          </button>
-        </div>
+        <span className={`availability-save-status${error ? ' is-error' : ''}`} role="status">{loading ? 'Wczytywanie…' : error ? 'Nie zapisano' : saving || dirty ? 'Zapisywanie…' : 'Zmiany zapisane'}</span>
       </div>
 
       {(error || notice) && <div className={`availability-feedback ${error ? 'is-error' : ''}`} role={error ? 'alert' : 'status'}>{error || notice}</div>}
+
+      {hoverNote && <aside className="availability-note-popover" role="tooltip" style={{ left: hoverNote.left, top: hoverNote.top }}>
+        <strong>{hoverNote.range}</strong>
+        {hoverNote.notes.map((entry, index) => <div className="availability-note-popover-entry" key={`${entry.userName}-${index}`}>
+          <span>{entry.userName}</span><p>{entry.note}</p>
+        </div>)}
+      </aside>}
 
       {dialogDate && <div className="availability-dialog-backdrop" role="presentation" onMouseDown={(event) => {
         if (event.target === event.currentTarget) setDialogDate(null);
@@ -482,11 +586,12 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
             }} inputMode="numeric" placeholder="10:30" /></label>
           </div>
           <p className="availability-dialog-hint">Godziny wpisz co pół godziny, np. 09:00 lub 09:30.</p>
+          <label className="availability-note-field">Notatka do bloku <textarea maxLength={500} rows={3} value={dialogNote} onChange={(event) => setDialogNote(event.target.value)} placeholder="Np. mogę dojechać po pracy" /></label>
           {error && <div className="availability-feedback is-error" role="alert">{error}</div>}
           <div className="availability-dialog-actions">
             {editingBlock && <button type="button" className="availability-dialog-delete" onClick={removeDialogBlock}><Trash2 size={15} />Usuń blok</button>}
             <button type="button" className="button button-secondary button-small" onClick={() => setDialogDate(null)}>Anuluj</button>
-            <button type="submit" className="button button-primary button-small">Zapisz blok</button>
+            <button type="submit" className="button button-primary button-small">{editingBlock ? 'Zmień blok' : 'Dodaj blok'}</button>
           </div>
         </form>
       </div>}

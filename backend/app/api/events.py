@@ -2,7 +2,6 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,12 +13,14 @@ from app.models.message import EventMessage
 from app.models.participant import EventParticipant
 from app.models.user import User
 from app.schemas.availability import (
+    AvailabilityNoteResponse,
     AvailabilitySetRequest,
     AvailabilitySlotResponse,
     EventAggregationResponse,
     SlotAggregateItem,
 )
 from app.schemas.event import EventCreate, EventListItem, EventResponse, EventUpdate
+from app.schemas.message import MessageCreate, MessageListResponse, MessageResponse
 
 router = APIRouter(prefix="/events", tags=["Events"])
 DbSession = Annotated[AsyncSession, Depends(get_db)]
@@ -33,20 +34,28 @@ async def _event_item(db: AsyncSession, event: Event, user_id: int) -> EventList
     messages_count = await db.scalar(
         select(func.count(EventMessage.id)).where(EventMessage.event_id == event.id)
     )
+    participant = await db.scalar(
+        select(EventParticipant).where(
+            EventParticipant.event_id == event.id,
+            EventParticipant.user_id == user_id,
+        )
+    ) if user_id else None
+    unread_count = 0
+    if participant is not None:
+        unread_query = select(func.count(EventMessage.id)).where(
+            EventMessage.event_id == event.id,
+            EventMessage.user_id != user_id,
+        )
+        if participant.last_read_at is not None:
+            unread_query = unread_query.where(EventMessage.created_at > participant.last_read_at)
+        unread_count = await db.scalar(unread_query) or 0
     return EventListItem(
         **EventResponse.model_validate(event).model_dump(),
         participants_count=participants_count or 0,
         messages_count=messages_count or 0,
+        unread_count=unread_count,
         is_owner=event.owner_id == user_id,
-        is_member=bool(
-            user_id
-            and await db.scalar(
-                select(EventParticipant.id).where(
-                    EventParticipant.event_id == event.id,
-                    EventParticipant.user_id == user_id,
-                )
-            )
-        ),
+        is_member=participant is not None,
     )
 
 
@@ -87,16 +96,16 @@ async def get_public_event(public_id: str, db: DbSession) -> EventListItem:
 async def get_event_membership(
     public_id: str, current_user: CurrentUser, db: DbSession
 ) -> dict[str, bool]:
-    event_id = await db.scalar(select(Event.id).where(Event.public_id == public_id))
-    if event_id is None:
+    event = await db.scalar(select(Event).where(Event.public_id == public_id))
+    if event is None:
         raise HTTPException(status_code=404, detail="Nie znaleziono wydarzenia")
     member_id = await db.scalar(
         select(EventParticipant.id).where(
-            EventParticipant.event_id == event_id,
+            EventParticipant.event_id == event.id,
             EventParticipant.user_id == current_user.id,
         )
     )
-    return {"is_member": member_id is not None}
+    return {"is_member": member_id is not None, "is_owner": event.owner_id == current_user.id}
 
 
 async def _require_event_member(event: Event, user: User, db: AsyncSession) -> None:
@@ -108,6 +117,91 @@ async def _require_event_member(event: Event, user: User, db: AsyncSession) -> N
     )
     if member_id is None:
         raise HTTPException(status_code=403, detail="Najpierw dołącz do tego spotkania")
+
+
+@router.get("/{public_id}/messages", response_model=MessageListResponse)
+async def list_event_messages(
+    public_id: str, current_user: CurrentUser, db: DbSession
+) -> MessageListResponse:
+    event = await db.scalar(select(Event).where(Event.public_id == public_id))
+    if event is None:
+        raise HTTPException(status_code=404, detail="Nie znaleziono spotkania")
+    await _require_event_member(event, current_user, db)
+
+    total = await db.scalar(
+        select(func.count(EventMessage.id)).where(EventMessage.event_id == event.id)
+    )
+    rows = await db.execute(
+        select(EventMessage, User.first_name, User.last_name)
+        .join(User, User.id == EventMessage.user_id)
+        .where(EventMessage.event_id == event.id)
+        .order_by(EventMessage.created_at.desc(), EventMessage.id.desc())
+        .limit(100)
+    )
+    messages = [
+        MessageResponse(
+            id=message.id,
+            event_id=message.event_id,
+            user_id=message.user_id,
+            user_name=f"{first_name} {last_name}",
+            body=message.body,
+            created_at=message.created_at,
+        )
+        for message, first_name, last_name in reversed(rows.all())
+    ]
+    participant = await db.scalar(
+        select(EventParticipant).where(
+            EventParticipant.event_id == event.id,
+            EventParticipant.user_id == current_user.id,
+        )
+    )
+    if participant is not None:
+        participant.last_read_at = max(
+            (message.created_at for message in messages), default=datetime.now(UTC)
+        )
+        await db.commit()
+    return MessageListResponse(total=total or 0, messages=messages)
+
+
+@router.post(
+    "/{public_id}/messages",
+    response_model=MessageResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_event_message(
+    public_id: str,
+    payload: MessageCreate,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> MessageResponse:
+    event = await db.scalar(select(Event).where(Event.public_id == public_id))
+    if event is None:
+        raise HTTPException(status_code=404, detail="Nie znaleziono spotkania")
+    await _require_event_member(event, current_user, db)
+    body = payload.body.strip()
+    if not body:
+        raise HTTPException(status_code=422, detail="Wiadomość nie może być pusta")
+
+    message = EventMessage(event_id=event.id, user_id=current_user.id, body=body)
+    db.add(message)
+    participant = await db.scalar(
+        select(EventParticipant).where(
+            EventParticipant.event_id == event.id,
+            EventParticipant.user_id == current_user.id,
+        )
+    )
+    if participant is not None:
+        participant.last_read_at = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(message)
+    return MessageResponse(
+        id=message.id,
+        event_id=message.event_id,
+        user_id=message.user_id,
+        user_name=f"{current_user.first_name} {current_user.last_name}",
+        body=message.body,
+        created_at=message.created_at,
+    )
 
 
 @router.get("/{public_id}/availability", response_model=EventAggregationResponse)
@@ -141,6 +235,31 @@ async def get_availability_aggregation(
         total_participants=total,
         slots=slots,
     )
+
+
+@router.get("/{public_id}/availability/notes", response_model=list[AvailabilityNoteResponse])
+async def get_availability_notes(
+    public_id: str, current_user: CurrentUser, db: DbSession
+) -> list[AvailabilityNoteResponse]:
+    event = await db.scalar(select(Event).where(Event.public_id == public_id))
+    if event is None:
+        raise HTTPException(status_code=404, detail="Nie znaleziono spotkania")
+    await _require_event_member(event, current_user, db)
+    rows = await db.execute(
+        select(AvailabilitySlot, User.first_name, User.last_name)
+        .join(User, User.id == AvailabilitySlot.user_id)
+        .where(AvailabilitySlot.event_id == event.id, AvailabilitySlot.note != "")
+        .order_by(AvailabilitySlot.slot_start)
+    )
+    return [
+        AvailabilityNoteResponse(
+            slot_start=slot.slot_start,
+            user_id=slot.user_id,
+            user_name=f"{first_name} {last_name}",
+            note=slot.note,
+        )
+        for slot, first_name, last_name in rows
+    ]
 
 
 @router.get("/{public_id}/availability/me", response_model=list[AvailabilitySlotResponse])
@@ -182,6 +301,19 @@ async def save_my_availability(
             raise HTTPException(status_code=422, detail="Dostępność wybiera się w krokach co 30 minut")
         normalized.add(slot_start.astimezone(UTC))
 
+    normalized_notes: dict[datetime, str] = {}
+    for raw_slot_start, raw_note in payload.slot_notes.items():
+        try:
+            note_start = datetime.fromisoformat(raw_slot_start.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail="Nieprawidłowy termin notatki") from error
+        if note_start.tzinfo is None or note_start.utcoffset() is None:
+            raise HTTPException(status_code=422, detail="Termin notatki musi zawierać strefę czasową")
+        note = raw_note.strip()
+        if len(note) > 500:
+            raise HTTPException(status_code=422, detail="Notatka może mieć najwyżej 500 znaków")
+        normalized_notes[note_start.astimezone(UTC)] = note
+
     await db.execute(
         delete(AvailabilitySlot).where(
             AvailabilitySlot.event_id == event.id,
@@ -189,7 +321,12 @@ async def save_my_availability(
         )
     )
     db.add_all(
-        AvailabilitySlot(event_id=event.id, user_id=current_user.id, slot_start=slot_start)
+        AvailabilitySlot(
+            event_id=event.id,
+            user_id=current_user.id,
+            slot_start=slot_start,
+            note=normalized_notes.get(slot_start, ""),
+        )
         for slot_start in sorted(normalized)
     )
     await db.commit()
@@ -223,6 +360,31 @@ async def join_event(
     return await _event_item(db, event, current_user.id)
 
 
+@router.post("/{public_id}/leave", status_code=status.HTTP_204_NO_CONTENT)
+async def leave_event(public_id: str, current_user: CurrentUser, db: DbSession) -> None:
+    event = await db.scalar(select(Event).where(Event.public_id == public_id))
+    if event is None:
+        raise HTTPException(status_code=404, detail="Nie znaleziono wydarzenia")
+    if event.owner_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Twórca może usunąć wydarzenie, ale nie może go opuścić")
+    participant = await db.scalar(
+        select(EventParticipant).where(
+            EventParticipant.event_id == event.id,
+            EventParticipant.user_id == current_user.id,
+        )
+    )
+    if participant is None:
+        raise HTTPException(status_code=400, detail="Nie jesteś uczestnikiem tego spotkania")
+    await db.execute(
+        delete(AvailabilitySlot).where(
+            AvailabilitySlot.event_id == event.id,
+            AvailabilitySlot.user_id == current_user.id,
+        )
+    )
+    await db.delete(participant)
+    await db.commit()
+
+
 @router.patch("/{public_id}", response_model=EventListItem)
 async def update_event(
     public_id: str,
@@ -237,13 +399,6 @@ async def update_event(
         raise HTTPException(status_code=403, detail="Tylko twórca może edytować wydarzenie")
 
     changes = payload.model_dump(exclude_unset=True)
-    final_start = changes.get("final_slot_start", event.final_slot_start)
-    final_end = changes.get("final_slot_end", event.final_slot_end)
-    if (final_start is None) != (final_end is None):
-        raise HTTPException(status_code=422, detail="Podaj początek i koniec wybranego terminu")
-    if final_start is not None and final_end <= final_start:
-        raise HTTPException(status_code=422, detail="Koniec terminu musi być późniejszy niż początek")
-
     for field, value in changes.items():
         setattr(event, field, value)
     await db.commit()

@@ -20,11 +20,10 @@ export interface EventItem {
   title: string;
   description: string | null;
   public_id: string;
-  final_slot_start: string | null;
-  final_slot_end: string | null;
   created_at: string;
   participants_count: number;
   messages_count: number;
+  unread_count: number;
   is_owner: boolean;
   is_member: boolean;
 }

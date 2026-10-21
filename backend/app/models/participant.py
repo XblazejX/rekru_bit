@@ -27,6 +27,7 @@ class EventParticipant(Base):
     joined_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
+    last_read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relacje
     event: Mapped["Event"] = relationship("Event", back_populates="participants")
