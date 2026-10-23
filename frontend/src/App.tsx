@@ -14,6 +14,7 @@ import {
   Moon,
   Copy,
   Plus,
+  Pencil,
   ShieldCheck,
   Sun,
   Trash2,
@@ -28,6 +29,7 @@ import './styles/auth.css';
 
 type Screen = 'login' | 'register' | 'verify' | 'forgot' | 'reset' | 'dashboard' | 'friends' | 'people' | 'notifications' | 'profile' | 'event';
 type Theme = 'dark' | 'light';
+interface EventInviteFriend { id: number; first_name: string; last_name: string }
 
 const FLOW_KEY = 'bit2meet.authFlow';
 const THEME_KEY = 'bit2meet.theme';
@@ -83,6 +85,11 @@ export const App = () => {
   const [socialUnreadCount, setSocialUnreadCount] = useState(0);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [showEventForm, setShowEventForm] = useState(false);
+  const [eventInviteFriends, setEventInviteFriends] = useState<EventInviteFriend[]>([]);
+  const [eventFriendsLoading, setEventFriendsLoading] = useState(false);
+  const [invitePickerEventId, setInvitePickerEventId] = useState<string | null>(null);
+  const [sentEventInvites, setSentEventInvites] = useState<Record<string, number[]>>({});
+  const [showFriendCodeEdit, setShowFriendCodeEdit] = useState(false);
   const [showAccountDelete, setShowAccountDelete] = useState(false);
   const [friendCodeDraft, setFriendCodeDraft] = useState('');
   const [sharedEventId, setSharedEventId] = useState(sharedEventFromPath);
@@ -111,6 +118,7 @@ export const App = () => {
   }, [email]);
 
   const navigateTo = (next: Screen) => {
+    if (next !== 'profile') setShowFriendCodeEdit(false);
     window.history.replaceState({}, '', '/');
     scrollPageToTop();
     setSharedEventId(null);
@@ -408,6 +416,7 @@ export const App = () => {
     try {
       const updated = await updateProfile<User>({
         notify_on_events: data.get('notify_on_events') === 'yes',
+        email_on_friend_requests: data.get('email_on_friend_requests') === 'yes',
       });
       setUser(updated);
       setNotice('Ustawienia zostały zapisane.');
@@ -424,9 +433,14 @@ export const App = () => {
     setError('');
     setNotice('');
     try {
-      const updated = await updateProfile<User>({ friend_code: friendCodeDraft.toUpperCase() });
+      const data = new FormData(event.currentTarget);
+      const updated = await updateProfile<User>({
+        friend_code: friendCodeDraft.toUpperCase(),
+        password: String(data.get('friend_code_password')),
+      });
       setUser(updated);
       setFriendCodeDraft(updated.friend_code);
+      setShowFriendCodeEdit(false);
       setNotice('Identyfikator znajomego został zmieniony.');
     } catch (requestError) {
       setError(errorText(requestError));
@@ -434,6 +448,58 @@ export const App = () => {
       setBusy(false);
     }
   };
+
+  const toggleEventInvitePicker = async (publicId: string) => {
+    if (invitePickerEventId === publicId) {
+      setInvitePickerEventId(null);
+      return;
+    }
+    setInvitePickerEventId(publicId);
+    setEventFriendsLoading(true);
+    setError('');
+    try {
+      setEventInviteFriends(await socialRequest<EventInviteFriend[]>('/friends'));
+    } catch (requestError) {
+      setError(errorText(requestError));
+    } finally {
+      setEventFriendsLoading(false);
+    }
+  };
+
+  const inviteFriendToEvent = async (publicId: string, friend: EventInviteFriend) => {
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const response = await eventRequest<{ message: string }>(`/${publicId}/invitations`, 'POST', { friend_id: friend.id });
+      setSentEventInvites((current) => ({
+        ...current,
+        [publicId]: [...new Set([...(current[publicId] ?? []), friend.id])],
+      }));
+      setNotice(response.message);
+    } catch (requestError) {
+      setError(errorText(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const eventInvitePicker = (publicId: string) => invitePickerEventId === publicId && (
+    <div className="event-existing-invite-picker">
+      <strong>Zaproszeni znajomi</strong>
+      {eventFriendsLoading ? <small>Wczytywanie znajomych…</small> : eventInviteFriends.length
+        ? <div className="event-invite-options">{eventInviteFriends.map((friend) => {
+          const alreadySent = sentEventInvites[publicId]?.includes(friend.id) ?? false;
+          return <div className="event-existing-invite-row" key={friend.id}>
+            <span>{friend.first_name} {friend.last_name}</span>
+            <button className="button button-secondary button-small" type="button" disabled={busy || alreadySent} onClick={() => void inviteFriendToEvent(publicId, friend)}>
+              {alreadySent ? 'Zaproszono' : 'Zaproś'}
+            </button>
+          </div>;
+        })}</div>
+        : <small>Nie masz jeszcze zaakceptowanych znajomych do zaproszenia.</small>}
+    </div>
+  );
 
   const handleAccountDelete = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -477,7 +543,7 @@ export const App = () => {
       });
       setEvents((current) => [created, ...current]);
       setShowEventForm(false);
-      setNotice('Wydarzenie zostało utworzone. Udostępnij link uczestnikom.');
+      setNotice('Wydarzenie zostało utworzone. Możesz teraz zaprosić znajomych lub udostępnić link.');
     } catch (requestError) {
       setError(errorText(requestError));
     } finally {
@@ -627,8 +693,10 @@ export const App = () => {
                 <div className="event-card-bottom"><span><Users size={15} /> {item.participants_count} {item.participants_count === 1 ? 'uczestnik' : 'uczestników'}</span>
                   <span>Wybór dostępności</span>
                   {item.unread_count > 0 && <span className="event-message-count" title={`${item.unread_count} nieprzeczytanych wiadomości`}><MessageCircle size={15} /> {item.unread_count}</span>}
+                  {item.is_member && <button className="button button-secondary button-small" type="button" onClick={() => void toggleEventInvitePicker(item.public_id)}><Users size={14} /> Zaproś znajomych</button>}
                   <button className="button button-secondary button-small" onClick={() => handleCopyEventLink(item.public_id)}><Copy size={14} /> Kopiuj link</button>
                 </div>
+                {eventInvitePicker(item.public_id)}
               </article>)}</div>}
           </section>
 
@@ -640,16 +708,18 @@ export const App = () => {
           <div className="dashboard-heading"><div className="form-kicker">KONTO</div><h1>Profil i ustawienia</h1><p>Zarządzaj identyfikatorem i preferencjami.</p></div>
           <section className="dashboard-card profile-card">
             <div className="section-heading"><div className="section-icon"><UserRound size={19} /></div><div><h2>{user.first_name} {user.last_name}</h2><p>{user.email}</p></div></div>
-            <div className="profile-details"><div><span>Twój identyfikator</span><strong className="profile-friend-code">#{user.friend_code}</strong></div><div><span>Imię i nazwisko</span><strong>{user.first_name} {user.last_name}</strong></div></div>
-            <form className="preference-form friend-code-form" onSubmit={handleFriendCodeSave}>
-              <label htmlFor="friend-code">Własny identyfikator</label>
+            <div className="profile-details"><div><span>Twój identyfikator</span><strong className="profile-friend-code">#{user.friend_code}</strong><button className="friend-code-edit-trigger" type="button" onClick={() => { setError(''); setShowFriendCodeEdit(true); }}><Pencil size={14} /> Zmień identyfikator</button></div><div><span>Imię i nazwisko</span><strong>{user.first_name} {user.last_name}</strong></div></div>
+            {showFriendCodeEdit && <form className="preference-form friend-code-form" onSubmit={handleFriendCodeSave}>
+              <label htmlFor="friend-code">Nowy identyfikator</label>
               <div className="friend-code-input"><span>#</span><input id="friend-code" value={friendCodeDraft} onChange={(event) => setFriendCodeDraft(event.target.value.replace(/[^a-z0-9]/gi, '').slice(0, 6).toUpperCase())} minLength={6} maxLength={6} pattern="[A-Z0-9]{6}" required /></div>
               <small>Dokładnie 6 liter lub cyfr. Identyfikator musi być wolny.</small>
-              <button className="button button-secondary button-small" type="submit" disabled={busy || friendCodeDraft === user.friend_code}><Check size={16} /> Zapisz identyfikator</button>
-            </form>
+              <Field label="Potwierdź zmianę hasłem"><input name="friend_code_password" type="password" autoComplete="current-password" required /></Field>
+              <div className="friend-code-edit-actions"><button className="button button-secondary button-small" type="button" disabled={busy} onClick={() => { setShowFriendCodeEdit(false); setFriendCodeDraft(user.friend_code); }}>Anuluj</button><button className="button button-secondary button-small" type="submit" disabled={busy || friendCodeDraft === user.friend_code}><Check size={16} /> Zapisz identyfikator</button></div>
+            </form>}
             <form className="preference-form" onSubmit={handlePreferenceSave}>
-              <div className="preference-row"><span className="preference-icon"><Bell size={18} /></span><span className="preference-copy"><strong>Powiadomienia o wydarzeniach</strong><small>Informacje o zmianach i ustalonych terminach</small></span><span className="radio-pair"><label><input type="radio" name="notify_on_events" value="yes" defaultChecked={user.notify_on_events} /> Tak</label><label><input type="radio" name="notify_on_events" value="no" defaultChecked={!user.notify_on_events} /> Nie</label></span></div>
-              <button className="button button-secondary button-small" type="submit" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />} Zapisz preferencję</button>
+              <div className="preference-row"><span className="preference-icon"><Bell size={18} /></span><span className="preference-copy"><strong>E-maile o zaproszeniach do wydarzeń</strong><small>Gdy znajomy zaprosi Cię do wydarzenia</small></span><span className="radio-pair"><label><input type="radio" name="notify_on_events" value="yes" defaultChecked={user.notify_on_events} /> Tak</label><label><input type="radio" name="notify_on_events" value="no" defaultChecked={!user.notify_on_events} /> Nie</label></span></div>
+              <div className="preference-row"><span className="preference-icon"><Mail size={18} /></span><span className="preference-copy"><strong>E-maile o zaproszeniach do znajomych</strong><small>Gdy ktoś wyśle Ci zaproszenie do znajomych</small></span><span className="radio-pair"><label><input type="radio" name="email_on_friend_requests" value="yes" defaultChecked={user.email_on_friend_requests} /> Tak</label><label><input type="radio" name="email_on_friend_requests" value="no" defaultChecked={!user.email_on_friend_requests} /> Nie</label></span></div>
+              <button className="button button-secondary button-small" type="submit" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />} Zapisz preferencje e-mail</button>
             </form>
             <div className="account-delete-area">
               {!showAccountDelete ? <button className="account-delete-trigger" type="button" onClick={() => { setError(''); setShowAccountDelete(true); }}><Trash2 size={15} /> Usuń konto</button> : <form className="account-delete-form" onSubmit={handleAccountDelete}>
@@ -694,11 +764,13 @@ export const App = () => {
                 <div className="event-overview-actions">
                   {user && isMember && sharedEvent.is_owner && <button className="button button-secondary button-small" onClick={() => void handleDeleteEvent()} disabled={busy}><Trash2 size={15} /> Usuń wydarzenie</button>}
                   {user && isMember && !sharedEvent.is_owner && <button className="button button-secondary button-small" onClick={() => void handleLeaveEvent()} disabled={busy}><LogOut size={15} /> Opuść wydarzenie</button>}
+                  {user && isMember && <button className="button button-secondary button-small" onClick={() => void toggleEventInvitePicker(sharedEvent.public_id)}><Users size={15} /> Zaproś znajomych</button>}
                   {!isMember && <button className="button button-primary" onClick={handleJoinEvent} disabled={busy}>
                     {busy ? 'Dołączanie…' : 'Dołącz do spotkania'} <ArrowRight size={17} />
                   </button>}
                 </div>
               </section>
+              {eventInvitePicker(sharedEvent.public_id)}
               {(error || notice) && <Feedback error={error} notice={notice} />}
               {user && isMember && <>
                 <div className="event-workspace">
@@ -758,8 +830,8 @@ export const App = () => {
                   <Field label="Hasło" icon={<LockKeyhole size={17} />} hint="Minimum 8 znaków"><input name="password" type="password" autoComplete="new-password" minLength={8} maxLength={128} placeholder="Utwórz hasło" required /></Field>
                   <Field label="Powtórz hasło" icon={<LockKeyhole size={17} />}><input name="confirm_password" type="password" autoComplete="new-password" minLength={8} maxLength={128} placeholder="Wpisz hasło ponownie" required /></Field>
                   <fieldset className="notification-choice">
-                    <legend>Maile o wydarzeniach</legend>
-                    <p>Czy chcesz otrzymywać powiadomienia e-mail o wydarzeniach?</p>
+                    <legend>E-maile o zaproszeniach do wydarzeń</legend>
+                    <p>Czy chcesz otrzymywać e-maile, gdy znajomi zaproszą Cię do wydarzenia?</p>
                     <div className="choice-options">
                       <label><input type="radio" name="notify_on_events" value="yes" defaultChecked required /> Tak, chcę otrzymywać</label>
                       <label><input type="radio" name="notify_on_events" value="no" /> Nie, dziękuję</label>

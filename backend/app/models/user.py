@@ -47,6 +47,9 @@ class User(Base, TimestampMixin):
 
     # Preferencje użytkownika
     notify_on_events: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    email_on_friend_requests: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     theme: Mapped[str] = mapped_column(String(20), default="dark", nullable=False)
 
     # Relacje

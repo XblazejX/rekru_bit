@@ -45,6 +45,9 @@
 .friend-code-form { display: grid; justify-items: start; gap: 8px; padding: 19px 0; border-bottom: 1px solid var(--border); }
 .friend-code-form > label { color: var(--text); font-size: .78rem; font-weight: 620; }
 .friend-code-form > small { color: var(--text-muted); font-size: .68rem; }
+.friend-code-edit-trigger { display: inline-flex; align-items: center; gap: 6px; width: fit-content; padding: 3px 0; color: var(--text-muted); background: transparent; font-size: .7rem; cursor: pointer; }
+.friend-code-edit-trigger:hover { color: var(--accent); }
+.friend-code-edit-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .friend-code-input { display: flex; align-items: center; width: min(270px, 100%); height: 43px; padding: 0 12px; border: 1px solid var(--border); border-radius: 9px; color: var(--accent); background: var(--bg); font-weight: 700; }
 .friend-code-input input { width: 100%; border: 0; outline: 0; color: var(--text); background: transparent; font: inherit; letter-spacing: .13em; }
 
@@ -182,6 +185,15 @@ input[type="radio"] { width: 15px; height: 15px; margin: 0; accent-color: var(--
 .events-section-heading .form-kicker { margin-bottom: 4px; }
 .events-section-heading h2 { color: var(--text); font-size: 1.25rem; letter-spacing: -.04em; }
 .event-form { display: grid; gap: 16px; }
+.event-invite-options { display: flex; flex-wrap: wrap; gap: 9px 17px; }
+.event-invite-options label { display: inline-flex; align-items: center; gap: 7px; color: var(--text-muted); font-size: .73rem; cursor: pointer; }
+.event-invite-options input { width: 15px; height: 15px; min-height: 0; accent-color: var(--accent); }
+.event-existing-invite-picker { display: grid; gap: 10px; padding: 14px 0 2px; margin-top: 12px; border-top: 1px solid var(--border); }
+.event-existing-invite-picker > strong { color: var(--text); font-size: .76rem; }
+.event-existing-invite-picker > small { color: var(--text-muted); font-size: .7rem; }
+.event-existing-invite-picker .event-invite-options { display: grid; gap: 6px; }
+.event-existing-invite-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; }
+.event-existing-invite-row > span { color: var(--text); font-size: .73rem; }
 .form-help { color: var(--text-muted); font-size: .75rem; line-height: 1.5; }
 .event-form .input-wrap input, .event-form textarea, .event-form select {
   width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;

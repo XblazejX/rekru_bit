@@ -11,6 +11,7 @@ const sampleUser: User = {
   friend_code: 'A1B2C3',
   is_active: true,
   notify_on_events: true,
+  email_on_friend_requests: false,
   theme: 'dark',
   created_at: '2026-10-20T10:00:00Z',
 };
@@ -119,7 +120,7 @@ describe('Bit2Meet authentication UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Grafik' }));
     expect(await screen.findByRole('heading', { name: 'Grafik znajomych' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Profil' }));
-    fireEvent.click(screen.getByLabelText('Nie'));
+    fireEvent.click(screen.getAllByLabelText('Nie')[0]);
     fireEvent.click(screen.getByRole('button', { name: /zapisz preferencję/i }));
     await waitFor(() => expect(calls.some((call) => call.method === 'PATCH')).toBe(true));
 

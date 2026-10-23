@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
@@ -6,6 +7,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.availability import AvailabilitySlot
 from app.models.event import Event
@@ -24,10 +26,27 @@ from app.schemas.availability import (
 from app.schemas.event import EventCreate, EventListItem, EventResponse, EventUpdate
 from app.schemas.message import MessageCreate, MessageListResponse, MessageResponse
 from app.schemas.social import EventInviteCreate
+from app.services.email import send_notification_email
 
 router = APIRouter(prefix="/events", tags=["Events"])
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
+logger = logging.getLogger(__name__)
+
+
+async def _send_event_invitation_email(inviter: User, event: Event, recipient: User) -> None:
+    if not recipient.notify_on_events:
+        return
+    link = f"{settings.FRONTEND_URL.rstrip('/')}/events/{event.public_id}"
+    try:
+        await send_notification_email(
+            recipient.email,
+            f"Zaproszenie do wydarzenia: {event.title}",
+            f"{inviter.full_name} zaprasza Cię do wydarzenia „{event.title}” w Bit2Meet.\n\n"
+            f"Otwórz wydarzenie: {link}",
+        )
+    except Exception:
+        logger.exception("Nie udało się wysłać e-maila z zaproszeniem do wydarzenia")
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -169,6 +188,9 @@ async def invite_friend_to_event(
         )
         db.add(invitation)
     await db.commit()
+    recipient = await db.get(User, payload.friend_id)
+    if recipient is not None:
+        await _send_event_invitation_email(current_user, event, recipient)
     return {"message": "Wysłano zaproszenie do spotkania."}
 
 

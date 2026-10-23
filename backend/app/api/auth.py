@@ -190,6 +190,8 @@ async def get_me(current_user: CurrentUser) -> User:
 @router.patch("/me", response_model=UserResponse)
 async def update_me(payload: UserUpdate, current_user: CurrentUser, db: DbSession) -> User:
     if payload.friend_code is not None:
+        if payload.password is None or not verify_secret(payload.password, current_user.password_hash):
+            raise HTTPException(status_code=400, detail="Hasło jest nieprawidłowe")
         requested_code = payload.friend_code.upper()
         existing = await db.scalar(
             select(User.id).where(User.friend_code == requested_code, User.id != current_user.id)
@@ -198,7 +200,7 @@ async def update_me(payload: UserUpdate, current_user: CurrentUser, db: DbSessio
             raise HTTPException(status_code=409, detail="Ten identyfikator jest już zajęty")
         current_user.friend_code = requested_code
     for field, value in payload.model_dump(exclude_unset=True).items():
-        if field == "friend_code":
+        if field in {"friend_code", "password"}:
             continue
         setattr(current_user, field, value.strip() if isinstance(value, str) else value)
     await db.commit()

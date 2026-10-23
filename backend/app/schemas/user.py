@@ -68,8 +68,10 @@ class UserUpdate(BaseModel):
     first_name: str | None = Field(None, min_length=2, max_length=50)
     last_name: str | None = Field(None, min_length=2, max_length=50)
     notify_on_events: bool | None = None
+    email_on_friend_requests: bool | None = None
     theme: str | None = Field(None, pattern="^(dark|light)$")
     friend_code: str | None = Field(None, min_length=6, max_length=6, pattern="^[A-Za-z0-9]{6}$")
+    password: str | None = Field(None, min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def require_at_least_one_change(self) -> "UserUpdate":
@@ -77,6 +79,8 @@ class UserUpdate(BaseModel):
             raise ValueError("Podaj przynajmniej jedno pole do zmiany")
         if any(getattr(self, field) is None for field in self.model_fields_set):
             raise ValueError("Pola profilu nie mogą być puste")
+        if self.friend_code is not None and self.password is None:
+            raise ValueError("Potwierdź zmianę identyfikatora hasłem")
         for field in ("first_name", "last_name"):
             value = getattr(self, field)
             if value is not None:
@@ -99,6 +103,7 @@ class UserResponse(BaseModel):
     friend_code: str
     is_active: bool
     notify_on_events: bool
+    email_on_friend_requests: bool
     theme: str
     created_at: datetime
 

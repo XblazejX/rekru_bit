@@ -171,12 +171,16 @@ async def test_custom_friend_code_is_unique(async_client, sent_codes):
     alice_code = (await async_client.get("/api/auth/me", headers=alice)).json()["friend_code"]
 
     collision = await async_client.patch(
-        "/api/auth/me", headers=bob, json={"friend_code": alice_code.lower()}
+        "/api/auth/me",
+        headers=bob,
+        json={"friend_code": alice_code.lower(), "password": "SuperHaslo123!"},
     )
     assert collision.status_code == 409
 
     changed = await async_client.patch(
-        "/api/auth/me", headers=bob, json={"friend_code": "a1b2c3"}
+        "/api/auth/me",
+        headers=bob,
+        json={"friend_code": "a1b2c3", "password": "SuperHaslo123!"},
     )
     assert changed.status_code == 200
     assert changed.json()["friend_code"] == "A1B2C3"

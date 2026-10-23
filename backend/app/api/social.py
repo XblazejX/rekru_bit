@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
@@ -18,10 +19,12 @@ from app.schemas.social import (
     NotificationItem,
     OwnFriendAvailabilitySlotResponse,
 )
+from app.services.email import send_notification_email
 
 router = APIRouter(prefix="/social", tags=["Friends and notifications"])
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
+logger = logging.getLogger(__name__)
 
 
 def _pair(first_id: int, second_id: int) -> tuple[int, int]:
@@ -97,6 +100,15 @@ async def send_friend_request(
         )
         db.add(friendship)
     await db.commit()
+    if recipient.email_on_friend_requests:
+        try:
+            await send_notification_email(
+                recipient.email,
+                "Nowe zaproszenie do znajomych w Bit2Meet",
+                f"{current_user.full_name} wysłał(a) Ci zaproszenie do znajomych w Bit2Meet.",
+            )
+        except Exception:
+            logger.exception("Nie udało się wysłać e-maila o zaproszeniu do znajomych")
     return {"message": "Wysłano zaproszenie do znajomych."}
 
 

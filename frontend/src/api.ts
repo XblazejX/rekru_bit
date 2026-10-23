@@ -6,6 +6,7 @@ export interface User {
   friend_code: string;
   is_active: boolean;
   notify_on_events: boolean;
+  email_on_friend_requests: boolean;
   theme: 'dark' | 'light';
   created_at: string;
 }

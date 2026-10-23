@@ -106,7 +106,7 @@ Link udostępniony uczestnikom otwiera stronę konkretnego spotkania. Konto jest
 - `GET /api/social/availability` — dostępność zaakceptowanych znajomych w wybranym zakresie dat.
 - `POST /api/events/{public_id}/invitations` — zaproszenie znajomego do spotkania; zaproszony akceptuje je w powiadomieniach.
 
-Po zalogowaniu otwiera się tygodniowy grafik znajomych. Własną dostępność dodaje się, edytuje i usuwa blokami, a zmiany zapisują się automatycznie. Wspólny grafik jest widoczny tylko dla zaakceptowanych znajomych. Usunięcie znajomego od razu odbiera dostęp do jego dostępności.
+Po zalogowaniu otwiera się tygodniowy grafik znajomych. Własną dostępność dodaje się, edytuje i usuwa blokami, a zmiany zapisują się automatycznie. Wspólny grafik jest widoczny tylko dla zaakceptowanych znajomych. Usunięcie znajomego od razu odbiera dostęp do jego dostępności. Profil pozwala ustawić e-maile o zaproszeniach do znajomych i wydarzeń; wysyłka używa tej samej konfiguracji SMTP co kody weryfikacyjne.
 
 ---
 
