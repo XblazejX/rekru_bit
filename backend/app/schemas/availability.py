@@ -30,6 +30,13 @@ class AvailabilityNoteResponse(BaseModel):
     note: str
 
 
+class AvailabilityParticipantResponse(BaseModel):
+    slot_start: datetime
+    user_id: int
+    user_name: str
+    note: str
+
+
 class SlotAggregateItem(BaseModel):
     slot_start: datetime
     available_count: int

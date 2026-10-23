@@ -3,6 +3,7 @@ export interface User {
   first_name: string;
   last_name: string;
   email: string;
+  friend_code: string;
   is_active: boolean;
   notify_on_events: boolean;
   theme: 'dark' | 'light';
@@ -88,6 +89,53 @@ export async function updateProfile<T>(changes: unknown): Promise<T> {
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(changes),
+    });
+  } catch {
+    throw new Error('Nie można połączyć się z serwerem. Sprawdź, czy aplikacja działa.');
+  }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(errorMessage(payload.detail));
+  return payload as T;
+}
+
+export async function deleteAccount(password: string): Promise<void> {
+  const token = tokenStorage.get();
+  if (!token) throw new Error('Sesja wygasła. Zaloguj się ponownie.');
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/auth/me`, {
+      method: 'DELETE',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ password }),
+    });
+  } catch {
+    throw new Error('Nie można połączyć się z serwerem. Sprawdź, czy aplikacja działa.');
+  }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(errorMessage(payload.detail));
+}
+
+export async function socialRequest<T>(
+  endpoint: string,
+  method = 'GET',
+  body?: unknown,
+): Promise<T> {
+  const token = tokenStorage.get();
+  if (!token) throw new Error('Sesja wygasła. Zaloguj się ponownie.');
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/social${endpoint}`, {
+      method,
+      headers: {
+        Accept: 'application/json',
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        Authorization: `Bearer ${token}`,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
     throw new Error('Nie można połączyć się z serwerem. Sprawdź, czy aplikacja działa.');

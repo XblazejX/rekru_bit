@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -20,6 +21,9 @@ class User(Base, TimestampMixin):
     first_name: Mapped[str] = mapped_column(String(50), nullable=False)
     last_name: Mapped[str] = mapped_column(String(50), nullable=False)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    friend_code: Mapped[str] = mapped_column(
+        String(6), default=lambda: secrets.token_hex(3).upper(), unique=True, index=True, nullable=False
+    )
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
 
     # Status konta i weryfikacja kodem e-mail

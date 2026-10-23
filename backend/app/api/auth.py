@@ -2,7 +2,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +15,7 @@ from app.schemas.user import (
     ForgotPassword,
     ResetPassword,
     TokenResponse,
+    UserDelete,
     UserLogin,
     UserRegister,
     UserResendCode,
@@ -28,6 +29,14 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
 MAX_CODE_ATTEMPTS = 5
+FRIEND_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+async def _new_friend_code(db: AsyncSession) -> str:
+    while True:
+        code = "".join(secrets.choice(FRIEND_CODE_ALPHABET) for _ in range(6))
+        if await db.scalar(select(User.id).where(User.friend_code == code)) is None:
+            return code
 
 
 def _new_code() -> str:
@@ -60,6 +69,7 @@ async def register(payload: UserRegister, db: DbSession) -> dict[str, str]:
         first_name=payload.first_name.strip(),
         last_name=payload.last_name.strip(),
         email=email,
+        friend_code=await _new_friend_code(db),
         password_hash=hash_secret(payload.password),
         is_active=False,
         verification_code_hash=hash_secret(code),
@@ -179,8 +189,31 @@ async def get_me(current_user: CurrentUser) -> User:
 
 @router.patch("/me", response_model=UserResponse)
 async def update_me(payload: UserUpdate, current_user: CurrentUser, db: DbSession) -> User:
+    if payload.friend_code is not None:
+        requested_code = payload.friend_code.upper()
+        existing = await db.scalar(
+            select(User.id).where(User.friend_code == requested_code, User.id != current_user.id)
+        )
+        if existing is not None:
+            raise HTTPException(status_code=409, detail="Ten identyfikator jest już zajęty")
+        current_user.friend_code = requested_code
     for field, value in payload.model_dump(exclude_unset=True).items():
+        if field == "friend_code":
+            continue
         setattr(current_user, field, value.strip() if isinstance(value, str) else value)
     await db.commit()
     await db.refresh(current_user)
     return current_user
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_me(
+    payload: UserDelete,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> Response:
+    if not verify_secret(payload.password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="Podane hasło jest nieprawidłowe")
+    await db.delete(current_user)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

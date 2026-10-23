@@ -1,7 +1,7 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,9 +11,11 @@ from app.models.availability import AvailabilitySlot
 from app.models.event import Event
 from app.models.message import EventMessage
 from app.models.participant import EventParticipant
+from app.models.social import EventInvitation, Friendship
 from app.models.user import User
 from app.schemas.availability import (
     AvailabilityNoteResponse,
+    AvailabilityParticipantResponse,
     AvailabilitySetRequest,
     AvailabilitySlotResponse,
     EventAggregationResponse,
@@ -21,10 +23,17 @@ from app.schemas.availability import (
 )
 from app.schemas.event import EventCreate, EventListItem, EventResponse, EventUpdate
 from app.schemas.message import MessageCreate, MessageListResponse, MessageResponse
+from app.schemas.social import EventInviteCreate
 
 router = APIRouter(prefix="/events", tags=["Events"])
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 async def _event_item(db: AsyncSession, event: Event, user_id: int) -> EventListItem:
@@ -106,6 +115,108 @@ async def get_event_membership(
         )
     )
     return {"is_member": member_id is not None, "is_owner": event.owner_id == current_user.id}
+
+
+@router.post("/{public_id}/invitations", status_code=status.HTTP_201_CREATED)
+async def invite_friend_to_event(
+    public_id: str,
+    payload: EventInviteCreate,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> dict[str, str]:
+    event = await db.scalar(select(Event).where(Event.public_id == public_id))
+    if event is None:
+        raise HTTPException(status_code=404, detail="Nie znaleziono spotkania")
+    await _require_event_member(event, current_user, db)
+    if payload.friend_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Nie możesz zaprosić siebie")
+    low_id, high_id = sorted((current_user.id, payload.friend_id))
+    friendship = await db.scalar(
+        select(Friendship).where(
+            Friendship.user_low_id == low_id,
+            Friendship.user_high_id == high_id,
+            Friendship.status == "accepted",
+        )
+    )
+    if friendship is None:
+        raise HTTPException(status_code=403, detail="Do wydarzenia możesz zaprosić tylko znajomego")
+    if await db.scalar(
+        select(EventParticipant.id).where(
+            EventParticipant.event_id == event.id,
+            EventParticipant.user_id == payload.friend_id,
+        )
+    ):
+        raise HTTPException(status_code=409, detail="Ta osoba jest już uczestnikiem spotkania")
+
+    invitation = await db.scalar(
+        select(EventInvitation).where(
+            EventInvitation.event_id == event.id,
+            EventInvitation.invited_user_id == payload.friend_id,
+        )
+    )
+    if invitation and invitation.status == "pending":
+        raise HTTPException(status_code=409, detail="Zaproszenie do tego spotkania już oczekuje")
+    if invitation:
+        invitation.invited_by_id = current_user.id
+        invitation.status = "pending"
+        invitation.created_at = datetime.now(UTC)
+    else:
+        invitation = EventInvitation(
+            event_id=event.id,
+            invited_by_id=current_user.id,
+            invited_user_id=payload.friend_id,
+            status="pending",
+        )
+        db.add(invitation)
+    await db.commit()
+    return {"message": "Wysłano zaproszenie do spotkania."}
+
+
+@router.post("/invitations/{invitation_id}/accept", response_model=EventListItem)
+async def accept_event_invitation(
+    invitation_id: int, current_user: CurrentUser, db: DbSession
+) -> EventListItem:
+    invitation = await db.scalar(
+        select(EventInvitation).where(
+            EventInvitation.id == invitation_id,
+            EventInvitation.invited_user_id == current_user.id,
+            EventInvitation.status == "pending",
+        )
+    )
+    if invitation is None:
+        raise HTTPException(status_code=404, detail="Nie znaleziono zaproszenia do spotkania")
+    event = await db.get(Event, invitation.event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Spotkanie już nie istnieje")
+    participant_id = await db.scalar(
+        select(EventParticipant.id).where(
+            EventParticipant.event_id == event.id,
+            EventParticipant.user_id == current_user.id,
+        )
+    )
+    if participant_id is None:
+        db.add(EventParticipant(event_id=event.id, user_id=current_user.id))
+    invitation.status = "accepted"
+    await db.commit()
+    return await _event_item(db, event, current_user.id)
+
+
+@router.post("/invitations/{invitation_id}/reject")
+async def reject_event_invitation(
+    invitation_id: int, current_user: CurrentUser, db: DbSession
+) -> dict[str, str]:
+    invitation = await db.scalar(
+        select(EventInvitation).where(
+            EventInvitation.id == invitation_id,
+            EventInvitation.invited_user_id == current_user.id,
+            EventInvitation.status == "pending",
+        )
+    )
+    if invitation is None:
+        raise HTTPException(status_code=404, detail="Nie znaleziono zaproszenia do spotkania")
+    invitation.status = "rejected"
+    await db.commit()
+    return {"message": "Odrzucono zaproszenie do spotkania."}
 
 
 async def _require_event_member(event: Event, user: User, db: AsyncSession) -> None:
@@ -254,6 +365,53 @@ async def get_availability_notes(
     return [
         AvailabilityNoteResponse(
             slot_start=slot.slot_start,
+            user_id=slot.user_id,
+            user_name=f"{first_name} {last_name}",
+            note=slot.note,
+        )
+        for slot, first_name, last_name in rows
+    ]
+
+
+@router.get(
+    "/{public_id}/availability/participants",
+    response_model=list[AvailabilityParticipantResponse],
+)
+async def get_availability_participants(
+    public_id: str,
+    current_user: CurrentUser,
+    db: DbSession,
+    start: Annotated[datetime, Query()],
+    end: Annotated[datetime, Query()],
+) -> list[AvailabilityParticipantResponse]:
+    event = await db.scalar(select(Event).where(Event.public_id == public_id))
+    if event is None:
+        raise HTTPException(status_code=404, detail="Nie znaleziono spotkania")
+    await _require_event_member(event, current_user, db)
+    if (
+        start.tzinfo is None
+        or start.utcoffset() is None
+        or end.tzinfo is None
+        or end.utcoffset() is None
+    ):
+        raise HTTPException(status_code=422, detail="Zakres dat musi zawierać strefę czasową")
+    start_utc, end_utc = start.astimezone(UTC), end.astimezone(UTC)
+    if end_utc <= start_utc or end_utc - start_utc > timedelta(days=8):
+        raise HTTPException(status_code=422, detail="Zakres kalendarza może obejmować najwyżej 8 dni")
+
+    rows = await db.execute(
+        select(AvailabilitySlot, User.first_name, User.last_name)
+        .join(User, User.id == AvailabilitySlot.user_id)
+        .where(
+            AvailabilitySlot.event_id == event.id,
+            AvailabilitySlot.slot_start >= start_utc,
+            AvailabilitySlot.slot_start < end_utc,
+        )
+        .order_by(AvailabilitySlot.slot_start, AvailabilitySlot.user_id)
+    )
+    return [
+        AvailabilityParticipantResponse(
+            slot_start=_as_utc(slot.slot_start),
             user_id=slot.user_id,
             user_name=f"{first_name} {last_name}",
             note=slot.note,

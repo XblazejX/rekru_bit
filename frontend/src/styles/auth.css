@@ -26,6 +26,14 @@
 }
 .brand-name { font-size: 1.2rem; font-weight: 750; letter-spacing: -.055em; }
 .brand-name span { color: var(--accent); }
+.main-nav-left, .main-nav-right { display: flex; align-items: center; gap: 4px; }
+.main-nav-left { margin-left: 28px; margin-right: auto; }
+.main-nav-right { margin: 0 20px; }
+.main-nav-left button, .main-nav-right button { position: relative; display: inline-flex; align-items: center; gap: 7px; min-height: 37px; padding: 0 11px; border: 1px solid transparent; border-radius: 9px; color: var(--text-muted); background: transparent; font: inherit; font-size: .76rem; cursor: pointer; white-space: nowrap; }
+.main-nav-left button:hover, .main-nav-right button:hover { color: var(--text); background: var(--surface); }
+.main-nav-left button.is-active { color: var(--text); border-color: var(--border); background: var(--surface); }
+.main-nav-right button.is-active { color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.nav-count { display: grid; place-items: center; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 99px; color: var(--text); background: color-mix(in srgb, var(--accent) 28%, var(--surface)); font-size: .6rem; font-weight: 700; }
 .topbar-actions { display: flex; align-items: center; gap: 16px; }
 .topbar-user { color: var(--text-muted); font-size: .875rem; }
 .theme-toggle {
@@ -34,6 +42,11 @@
   border-radius: var(--radius-full); font-size: .8rem; transition: color var(--transition-fast), border-color var(--transition-fast);
 }
 .theme-toggle:hover { color: var(--text); border-color: var(--accent); }
+.friend-code-form { display: grid; justify-items: start; gap: 8px; padding: 19px 0; border-bottom: 1px solid var(--border); }
+.friend-code-form > label { color: var(--text); font-size: .78rem; font-weight: 620; }
+.friend-code-form > small { color: var(--text-muted); font-size: .68rem; }
+.friend-code-input { display: flex; align-items: center; width: min(270px, 100%); height: 43px; padding: 0 12px; border: 1px solid var(--border); border-radius: 9px; color: var(--accent); background: var(--bg); font-weight: 700; }
+.friend-code-input input { width: 100%; border: 0; outline: 0; color: var(--text); background: transparent; font: inherit; letter-spacing: .13em; }
 
 .auth-page {
   min-height: calc(100vh - 76px); display: grid; grid-template-columns: minmax(350px, .92fr) minmax(470px, 1.08fr);
@@ -121,7 +134,11 @@ input[type="radio"] { width: 15px; height: 15px; margin: 0; accent-color: var(--
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .dashboard-page { width: min(790px, calc(100% - 40px)); margin: 0 auto; padding: clamp(44px, 7vw, 86px) 0 55px; }
+.dashboard-heading-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 29px; }
 .dashboard-heading { margin-bottom: 29px; }
+.dashboard-heading-row .dashboard-heading { margin-bottom: 0; }
+.social-dashboard-button { position: relative; flex: 0 0 auto; padding: 0 14px; }
+.social-dashboard-button > span { display: grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 999px; color: #fff; background: var(--accent); font-size: .64rem; }
 .eyebrow { color: var(--success); font-size: .65rem; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 12px color-mix(in srgb, var(--success) 65%, transparent); }
 .dashboard-heading h1 { margin-top: 13px; color: var(--text); font-size: clamp(2.1rem, 5vw, 3rem); letter-spacing: -.065em; }
@@ -136,6 +153,17 @@ input[type="radio"] { width: 15px; height: 15px; margin: 0; accent-color: var(--
 .profile-details span { color: var(--text-muted); font-size: .7rem; }
 .profile-details strong { overflow-wrap: anywhere; color: var(--text); font-size: .84rem; font-weight: 590; }
 .preference-form { display: grid; gap: 16px; padding-top: 18px; }
+.account-delete-area { padding-top: 14px; margin-top: 20px; border-top: 1px solid var(--border); }
+.account-delete-trigger { display: inline-flex; align-items: center; gap: 7px; padding: 5px 0; color: var(--text-muted); background: transparent; font-size: .73rem; cursor: pointer; }
+.account-delete-trigger:hover { color: var(--danger); }
+.account-delete-form { display: grid; gap: 12px; }
+.account-delete-form h3 { color: var(--danger); font-size: .88rem; }
+.account-delete-form > p { color: var(--text-muted); font-size: .73rem; line-height: 1.5; }
+.account-delete-form .input-wrap input { width: 100%; min-height: 42px; padding: 0 12px; border: 1px solid var(--border); border-radius: 9px; outline: none; color: var(--text); background: var(--bg); font: inherit; }
+.account-delete-form .input-wrap input:focus { border-color: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 15%, transparent); }
+.account-delete-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.account-delete-confirm { display: inline-flex; align-items: center; gap: 7px; border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border)); color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, var(--surface)); }
+.account-delete-confirm:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 17%, var(--surface)); }
 .preference-row { display: flex; align-items: center; gap: 11px; }
 .preference-icon { width: 34px; height: 34px; display: grid; flex: 0 0 auto; place-items: center; color: var(--text-muted); background: var(--bg); border-radius: 10px; }
 .preference-copy { display: grid; flex: 1; gap: 3px; }
@@ -204,7 +232,11 @@ input[type="radio"] { width: 15px; height: 15px; margin: 0; accent-color: var(--
   .welcome-footer { left: 35px; }
 }
 @media (max-width: 740px) {
-  .topbar { height: 66px; padding: 0 19px; }
+  .topbar { height: auto; min-height: 66px; padding: 10px 14px; flex-wrap: wrap; gap: 7px; }
+  .main-nav-left { order: 3; margin: 0 auto 0 0; }
+  .main-nav-right { order: 4; margin: 0 0 0 auto; }
+  .topbar-actions { margin-left: auto; }
+  .main-nav-left button, .main-nav-right button { gap: 4px; min-height: 33px; padding: 0 7px; font-size: .67rem; }
   .topbar-user { display: none; }
   .auth-page { min-height: calc(100vh - 66px); display: block; padding: 27px 16px 38px; }
   .welcome-panel { display: none; }

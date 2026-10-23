@@ -8,6 +8,7 @@ const sampleUser: User = {
   first_name: 'Anna',
   last_name: 'Nowak',
   email: 'anna@example.com',
+  friend_code: 'A1B2C3',
   is_active: true,
   notify_on_events: true,
   theme: 'dark',
@@ -42,7 +43,7 @@ describe('Bit2Meet authentication UI', () => {
     vi.restoreAllMocks();
   });
 
-  it('registers an account, verifies its email and opens the profile', async () => {
+  it('registers an account, verifies its email and opens the friends schedule', async () => {
     let registrationBody: Record<string, unknown> | undefined;
     let verificationBody: Record<string, unknown> | undefined;
     mockFetch((url, init) => {
@@ -86,7 +87,7 @@ describe('Bit2Meet authentication UI', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /potwierdź adres/i }));
 
-    expect(await screen.findByText('Twoje konto Bit2Meet jest gotowe do użycia.')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Grafik znajomych' })).toBeInTheDocument();
     expect(verificationBody).toEqual({ email: 'anna@example.com', code: '123456' });
     expect(localStorage.getItem('bit2meet.accessToken')).toBe('test-access-token');
   });
@@ -110,7 +111,14 @@ describe('Bit2Meet authentication UI', () => {
     fireEvent.change(screen.getByLabelText('Hasło'), { target: { value: 'SilneHaslo123!' } });
     fireEvent.click(screen.getByRole('button', { name: /zaloguj się/i }));
 
-    expect(await screen.findByText('Cześć, Anna.')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Grafik znajomych' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /wydarzenia/i }));
+    expect(await screen.findByRole('heading', { name: 'Wydarzenia' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Profil' }));
+    expect(await screen.findByRole('heading', { name: 'Profil i ustawienia' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Grafik' }));
+    expect(await screen.findByRole('heading', { name: 'Grafik znajomych' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Profil' }));
     fireEvent.click(screen.getByLabelText('Nie'));
     fireEvent.click(screen.getByRole('button', { name: /zapisz preferencję/i }));
     await waitFor(() => expect(calls.some((call) => call.method === 'PATCH')).toBe(true));
@@ -118,6 +126,43 @@ describe('Bit2Meet authentication UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Przełącz motyw' }));
     await waitFor(() => expect(localStorage.getItem('bit2meet.theme')).toBe('light'));
     expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+  });
+
+  it('deletes the account only after submitting the current password', async () => {
+    let deleteCall: { method?: string; body?: Record<string, unknown>; authorization?: string } | undefined;
+    mockFetch((url, init) => {
+      if (url.endsWith('/auth/login')) return response(authResponse);
+      if (url.endsWith('/api/events')) return response([]);
+      if (url.endsWith('/auth/me') && init?.method === 'DELETE') {
+        deleteCall = {
+          method: init.method,
+          body: JSON.parse(String(init.body)),
+          authorization: new Headers(init.headers).get('Authorization') ?? undefined,
+        };
+        return response({}, 204);
+      }
+      throw new Error(`Unexpected request: ${url} (${init?.method ?? 'GET'})`);
+    });
+
+    render(<App />);
+    fireEvent.change(screen.getByLabelText('Adres e-mail'), { target: { value: sampleUser.email } });
+    fireEvent.change(screen.getByLabelText('Hasło'), { target: { value: 'SilneHaslo123!' } });
+    fireEvent.click(screen.getByRole('button', { name: /zaloguj się/i }));
+    expect(await screen.findByRole('heading', { name: 'Grafik znajomych' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Profil' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Usuń konto' }));
+    fireEvent.change(screen.getByLabelText('Potwierdź hasłem'), { target: { value: 'SilneHaslo123!' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Trwale usuń konto' }));
+
+    expect(await screen.findByRole('heading', { name: 'Zaloguj się' })).toBeInTheDocument();
+    expect(screen.getByText('Konto zostało trwale usunięte.')).toBeInTheDocument();
+    expect(deleteCall).toEqual({
+      method: 'DELETE',
+      body: { password: 'SilneHaslo123!' },
+      authorization: 'Bearer test-access-token',
+    });
+    expect(localStorage.getItem('bit2meet.accessToken')).toBeNull();
   });
 
   it('requests a reset code and submits matching new passwords', async () => {

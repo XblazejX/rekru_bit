@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import select
 
 from app.api import auth
+from app.models.event import Event
 from app.models.user import User
 
 
@@ -180,6 +181,39 @@ async def test_profile_requires_token_and_updates_preferences(async_client, sent
         "/api/auth/me", headers={"Authorization": "Bearer invalid.token.value"}
     )
     assert invalid_token.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_delete_account_requires_password_and_removes_owned_events(
+    async_client, async_session, sent_codes
+):
+    await async_client.post("/api/auth/register", json=registration_payload())
+    verified = await async_client.post(
+        "/api/auth/verify", json={"email": "ola@example.com", "code": sent_codes[0][1]}
+    )
+    token = verified.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    user = await async_session.scalar(select(User).where(User.email == "ola@example.com"))
+    assert user is not None
+    event = Event(title="Prywatne spotkanie", owner_id=user.id)
+    async_session.add(event)
+    await async_session.commit()
+    event_id = event.id
+
+    wrong_password = await async_client.request(
+        "DELETE", "/api/auth/me", headers=headers, json={"password": "Niepoprawne123!"}
+    )
+    assert wrong_password.status_code == 400
+    assert await async_session.get(User, user.id) is not None
+    assert await async_session.get(Event, event_id) is not None
+
+    deleted = await async_client.request(
+        "DELETE", "/api/auth/me", headers=headers, json={"password": "SuperHaslo123!"}
+    )
+    assert deleted.status_code == 204
+    assert await async_session.scalar(select(User).where(User.id == user.id)) is None
+    assert await async_session.get(Event, event_id) is None
+    assert (await async_client.get("/api/auth/me", headers=headers)).status_code == 401
 
 
 @pytest.mark.asyncio

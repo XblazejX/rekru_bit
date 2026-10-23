@@ -1,4 +1,5 @@
 from app.schemas.availability import (
+    AvailabilityParticipantResponse,
     AvailabilitySetRequest,
     AvailabilitySlotResponse,
     EventAggregationResponse,
@@ -45,6 +46,7 @@ __all__ = [
     "EventListItem",
     "ParticipantInfo",
     "AvailabilitySetRequest",
+    "AvailabilityParticipantResponse",
     "AvailabilitySlotResponse",
     "SlotAggregateItem",
     "EventAggregationResponse",

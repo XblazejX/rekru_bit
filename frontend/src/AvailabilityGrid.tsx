@@ -28,6 +28,13 @@ interface AvailabilityNote {
   note: string;
 }
 
+interface AvailabilityParticipant {
+  slot_start: string;
+  user_id: number;
+  user_name: string;
+  note: string;
+}
+
 const SLOT_COUNT = 48;
 const HEADER_HEIGHT = 42;
 const ROW_HEIGHT = 26;
@@ -109,7 +116,7 @@ function normalizeHourInput(value: string, allowEndOfDay = false): string | null
   return `${String(hours).padStart(2, '0')}:00`;
 }
 
-export default function AvailabilityGrid({ publicId }: { publicId: string }) {
+export default function AvailabilityGrid({ publicId, currentUserId, currentUserName }: { publicId: string; currentUserId: number; currentUserName: string }) {
   const [anchorDate, setAnchorDate] = useState(() => mondayOf(new Date()));
   const [selectedDate, setSelectedDate] = useState(() => dateInputValue(new Date()));
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -117,6 +124,7 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
   const [selectedNotes, setSelectedNotes] = useState<Map<string, string>>(() => new Map());
   const [savedNotes, setSavedNotes] = useState<Map<string, string>>(() => new Map());
   const [noteSlots, setNoteSlots] = useState<AvailabilityNote[]>([]);
+  const [participantSlots, setParticipantSlots] = useState<AvailabilityParticipant[]>([]);
   const [aggregate, setAggregate] = useState<AvailabilityAggregate | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -128,7 +136,7 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
   const [dialogEnd, setDialogEnd] = useState('10:00');
   const [dialogNote, setDialogNote] = useState('');
   const [editingBlock, setEditingBlock] = useState<{ start: number; end: number } | null>(null);
-  const [hoverNote, setHoverNote] = useState<{ key: string; left: number; top: number; range: string; notes: Array<{ userName: string; note: string }> } | null>(null);
+  const [hoverNote, setHoverNote] = useState<{ key: string; left: number; top: number; range: string; notes: Array<{ userName: string; range: string; note: string }> } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const jumpAfterRender = useRef(false);
 
@@ -166,6 +174,18 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
   const dates = useMemo(() => {
     return Array.from({ length: 7 }, (_, index) => addDays(mondayOf(anchorDate), index));
   }, [anchorDate]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const start = mondayOf(anchorDate);
+    const end = addDays(start, 7);
+    const query = `?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`;
+    setParticipantSlots([]);
+    eventRequest<AvailabilityParticipant[]>(`/${publicId}/availability/participants${query}`)
+      .then((slots) => { if (!cancelled) setParticipantSlots(slots); })
+      .catch((requestError) => { if (!cancelled) setError(requestError instanceof Error ? requestError.message : 'Nie udało się wczytać dostępności uczestników.'); });
+    return () => { cancelled = true; };
+  }, [publicId, anchorDate]);
 
   const aggregateBySlot = useMemo(
     () => new Map((aggregate?.slots ?? []).map((slot) => [new Date(slot.slot_start).toISOString(), slot])),
@@ -241,24 +261,24 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
   }, [aggregate?.total_participants, aggregateBySlot, dates, noteSlots, savedSlots, selected]);
 
   const showNotePopover = (event: MouseEvent<HTMLButtonElement>, dateIndex: number, slotIndex: number) => {
-    const matches = visualBlocks.noteBlocks.filter((block) => block.dateIndex === dateIndex && slotIndex >= block.start && slotIndex < block.end);
+    const day = dates[dateIndex];
+    const hoveredKey = slotKey(day, slotIndex);
+    const matches = participantSlots.filter((entry) => new Date(entry.slot_start).toISOString() === hoveredKey)
+      .map((entry) => ({ ...entry, note: entry.user_id === currentUserId ? selectedNotes.get(hoveredKey) ?? '' : entry.note }));
+    if (selected.has(hoveredKey) && !matches.some((entry) => entry.user_id === currentUserId)) {
+      matches.push({ slot_start: hoveredKey, user_id: currentUserId, user_name: currentUserName, note: selectedNotes.get(hoveredKey) ?? '' });
+    }
     if (!matches.length) {
       setHoverNote(null);
       return;
     }
-    const key = matches.map((block) => `${block.userId}:${block.start}:${block.end}`).join('|');
+    const key = matches.map((entry) => `${entry.user_id}:${entry.slot_start}`).join('|');
     // Read the DOM event synchronously. React may run state updater functions
     // later, when event.currentTarget has already been cleared.
     const cell = event.currentTarget.getBoundingClientRect();
-    const firstSlot = Math.min(...matches.map((block) => block.start));
-    const lastSlot = Math.max(...matches.map((block) => block.end));
-    const anchor = {
-      left: cell.left,
-      right: cell.right,
-      top: cell.top + (firstSlot - slotIndex) * ROW_HEIGHT,
-    };
+    const anchor = { left: cell.left, right: cell.right, top: cell.top };
     const width = Math.min(260, window.innerWidth - 24);
-    const height = Math.min(150, 60 + matches.reduce((total, block) => total + Math.min(42, Math.ceil(block.note.length / 34)) * 15 + 16, 0));
+    const height = Math.min(200, 58 + matches.reduce((total, entry) => total + 27 + (entry.note ? Math.min(42, Math.ceil(entry.note.length / 34)) * 15 : 0), 0));
     const rightPosition = anchor.right + 8;
     const leftPosition = anchor.left - width - 8;
     const centeredPosition = anchor.left + (anchor.right - anchor.left - width) / 2;
@@ -268,12 +288,35 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
         ? leftPosition
         : Math.min(window.innerWidth - width - 12, Math.max(12, centeredPosition));
     const top = Math.min(window.innerHeight - height - 12, Math.max(12, anchor.top));
+    const daySlots = participantSlots.map((entry) => ({
+      ...entry,
+      date: new Date(entry.slot_start),
+      index: new Date(entry.slot_start).getHours() * 2 + (new Date(entry.slot_start).getMinutes() >= 30 ? 1 : 0),
+    }));
+    const entries = matches.map((entry) => {
+      const userSlots = new Set(daySlots.filter((candidate) => candidate.user_id === entry.user_id
+        && dateInputValue(candidate.date) === dateInputValue(day)).map((candidate) => candidate.index));
+      if (entry.user_id === currentUserId) {
+        selected.forEach((selectedKey) => {
+          const selectedDate = new Date(selectedKey);
+          if (dateInputValue(selectedDate) === dateInputValue(day)) {
+            userSlots.add(selectedDate.getHours() * 2 + (selectedDate.getMinutes() >= 30 ? 1 : 0));
+          }
+        });
+      }
+      const hoveredIndex = new Date(entry.slot_start).getHours() * 2 + (new Date(entry.slot_start).getMinutes() >= 30 ? 1 : 0);
+      let start = hoveredIndex;
+      let end = hoveredIndex + 1;
+      while (start > 0 && userSlots.has(start - 1)) start -= 1;
+      while (end < SLOT_COUNT && userSlots.has(end)) end += 1;
+      return { userName: entry.user_name, range: `${formatTime(start)}–${formatTime(end)}`, note: entry.note };
+    });
     const nextPopover = {
       key,
       left,
       top,
-      range: `${formatTime(firstSlot)}–${formatTime(lastSlot)}`,
-      notes: matches.map((block) => ({ userName: block.userName, note: block.note })),
+      range: formatDate(day, { weekday: 'long', day: 'numeric', month: 'long' }),
+      notes: entries,
     };
     setHoverNote((current) => current?.key === key ? current : nextPopover);
   };
@@ -437,6 +480,10 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
       const refreshed = await eventRequest<AvailabilityAggregate>(`/${publicId}/availability`);
       setAggregate(refreshed);
       setNoteSlots(await eventRequest<AvailabilityNote[]>(`/${publicId}/availability/notes`));
+      const rangeStart = mondayOf(anchorDate);
+      const rangeEnd = addDays(rangeStart, 7);
+      const participantQuery = `?start=${encodeURIComponent(rangeStart.toISOString())}&end=${encodeURIComponent(rangeEnd.toISOString())}`;
+      setParticipantSlots(await eventRequest<AvailabilityParticipant[]>(`/${publicId}/availability/participants${participantQuery}`));
       setNotice('Dostępność została zapisana.');
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Nie udało się zapisać dostępności.');
@@ -500,9 +547,6 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
                   Math.max(0, rawCount + (isSelected && !wasSelected ? 1 : 0) - (!isSelected && wasSelected ? 1 : 0)),
                 );
                 const past = isPastSlot(date, slotIndex, now);
-                const range = visualBlocks.ownRanges.get(key)
-                  ?? visualBlocks.heatRanges.get(key)
-                  ?? `${formatTime(slotIndex)}–${formatTime(slotIndex + 1)}`;
                 const notes = visualBlocks.noteRanges.get(key) ?? [];
                 return <div className="availability-cell-wrap" role="gridcell" key={key}>
                   <button
@@ -512,8 +556,6 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
                     disabled={past}
                     aria-pressed={isSelected}
                     aria-label={`${formatDate(date, { weekday: 'long', day: 'numeric', month: 'long' })}, ${formatTime(slotIndex)}. ${count ? `${count} osób dostępnych.` : 'Wolne pole.'} ${notes.length ? `Notatka: ${notes.join(' / ')}.` : ''} ${isSelected ? 'Twój termin.' : 'Kliknij, aby dodać blok.'}`}
-                    title={notes.length ? undefined : `${range} · ${count ? `${count} dostępnych` : 'dodaj termin'}`}
-                    data-hover-range={notes.length ? undefined : range}
                     tabIndex={key === firstEditableKey ? 0 : -1}
                     onMouseEnter={(event) => showNotePopover(event, dateIndex, slotIndex)}
                     onMouseLeave={() => setHoverNote(null)}
@@ -522,7 +564,7 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
                 </div>;
               })}
               {currentDayIndex >= 0 && slotIndex === nowSlot && <div className="availability-now-line" aria-hidden="true" style={{ top: `${nowFraction * 100}%` }}>
-                <span style={{ gridColumn: currentDayIndex + 2 }}><i>{formatTime(nowSlot)}</i></span>
+                <span><i>{now.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit', hour12: false })}</i></span>
               </div>}
             </div>)}
             {visualBlocks.blocks.map((block) => {
@@ -562,7 +604,7 @@ export default function AvailabilityGrid({ publicId }: { publicId: string }) {
       {hoverNote && <aside className="availability-note-popover" role="tooltip" style={{ left: hoverNote.left, top: hoverNote.top }}>
         <strong>{hoverNote.range}</strong>
         {hoverNote.notes.map((entry, index) => <div className="availability-note-popover-entry" key={`${entry.userName}-${index}`}>
-          <span>{entry.userName}</span><p>{entry.note}</p>
+          <span>{entry.userName} · {entry.range}</span>{entry.note && <p>{entry.note}</p>}
         </div>)}
       </aside>}
 

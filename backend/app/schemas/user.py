@@ -43,6 +43,10 @@ class UserLogin(BaseModel):
     password: str
 
 
+class UserDelete(BaseModel):
+    password: str = Field(..., min_length=1, max_length=128)
+
+
 class ForgotPassword(BaseModel):
     email: EmailStr
 
@@ -65,6 +69,7 @@ class UserUpdate(BaseModel):
     last_name: str | None = Field(None, min_length=2, max_length=50)
     notify_on_events: bool | None = None
     theme: str | None = Field(None, pattern="^(dark|light)$")
+    friend_code: str | None = Field(None, min_length=6, max_length=6, pattern="^[A-Za-z0-9]{6}$")
 
     @model_validator(mode="after")
     def require_at_least_one_change(self) -> "UserUpdate":
@@ -79,6 +84,8 @@ class UserUpdate(BaseModel):
                 if len(value) < 2:
                     raise ValueError("Imię i nazwisko muszą mieć co najmniej 2 znaki")
                 setattr(self, field, value)
+        if self.friend_code is not None:
+            self.friend_code = self.friend_code.upper()
         return self
 
 
@@ -89,6 +96,7 @@ class UserResponse(BaseModel):
     first_name: str
     last_name: str
     email: str
+    friend_code: str
     is_active: bool
     notify_on_events: bool
     theme: str

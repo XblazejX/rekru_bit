@@ -20,12 +20,13 @@ import {
   UserRound,
   Users,
 } from 'lucide-react';
-import { authRequest, AuthResponse, eventRequest, EventItem, tokenStorage, updateProfile, User } from './api';
+import { authRequest, AuthResponse, deleteAccount, eventRequest, EventItem, socialRequest, tokenStorage, updateProfile, User } from './api';
 import AvailabilityGrid from './AvailabilityGrid';
 import EventChat from './EventChat';
+import FriendsPage from './FriendsPage';
 import './styles/auth.css';
 
-type Screen = 'login' | 'register' | 'verify' | 'forgot' | 'reset' | 'dashboard' | 'event';
+type Screen = 'login' | 'register' | 'verify' | 'forgot' | 'reset' | 'dashboard' | 'friends' | 'people' | 'notifications' | 'profile' | 'event';
 type Theme = 'dark' | 'light';
 
 const FLOW_KEY = 'bit2meet.authFlow';
@@ -52,6 +53,10 @@ function setDocumentTheme(theme: Theme) {
   localStorage.setItem(THEME_KEY, theme);
 }
 
+function scrollPageToTop() {
+  if (window.scrollY > 0) window.scrollTo(0, 0);
+}
+
 function getInitialTheme(): Theme {
   return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark';
 }
@@ -75,9 +80,12 @@ export const App = () => {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [events, setEvents] = useState<EventItem[]>([]);
+  const [socialUnreadCount, setSocialUnreadCount] = useState(0);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [showEventForm, setShowEventForm] = useState(false);
-  const [sharedEventId] = useState(sharedEventFromPath);
+  const [showAccountDelete, setShowAccountDelete] = useState(false);
+  const [friendCodeDraft, setFriendCodeDraft] = useState('');
+  const [sharedEventId, setSharedEventId] = useState(sharedEventFromPath);
   const [sharedEvent, setSharedEvent] = useState<EventItem | null>(null);
   const [sharedEventLoading, setSharedEventLoading] = useState(Boolean(sharedEventId));
   const [isMember, setIsMember] = useState(false);
@@ -102,9 +110,57 @@ export const App = () => {
     setScreen(next);
   }, [email]);
 
+  const navigateTo = (next: Screen) => {
+    window.history.replaceState({}, '', '/');
+    scrollPageToTop();
+    setSharedEventId(null);
+    setSharedEvent(null);
+    setSharedEventLoading(false);
+    setIsMember(false);
+    setJoinAfterLogin(false);
+    setError('');
+    setNotice('');
+    setScreen(next);
+  };
+
+  const openEvent = (publicId: string) => {
+    window.history.pushState({}, '', `/events/${publicId}`);
+    scrollPageToTop();
+    setSharedEventId(publicId);
+    setSharedEvent(null);
+    setSharedEventLoading(true);
+    setIsMember(false);
+    setError('');
+    setNotice('');
+    setScreen('event');
+  };
+
   useEffect(() => {
     setDocumentTheme(theme);
   }, [theme]);
+
+  useEffect(() => {
+    const syncEventRoute = () => {
+      const publicId = sharedEventFromPath();
+      if (publicId) {
+        scrollPageToTop();
+        setSharedEventId(publicId);
+        setSharedEvent(null);
+        setSharedEventLoading(true);
+        setIsMember(false);
+        setScreen('event');
+      } else if (screen === 'event') {
+        scrollPageToTop();
+        setSharedEventId(null);
+        setSharedEvent(null);
+        setSharedEventLoading(false);
+        setIsMember(false);
+        setScreen(user ? 'dashboard' : 'login');
+      }
+    };
+    window.addEventListener('popstate', syncEventRoute);
+    return () => window.removeEventListener('popstate', syncEventRoute);
+  }, [screen, user]);
 
   useEffect(() => {
     const token = tokenStorage.get();
@@ -114,8 +170,9 @@ export const App = () => {
       .then((profile) => {
         if (cancelled) return;
         setUser(profile);
+        setFriendCodeDraft(profile.friend_code);
         setTheme(profile.theme);
-        setScreen(sharedEventId ? 'event' : 'dashboard');
+        setScreen(sharedEventId ? 'event' : 'friends');
       })
       .catch(() => {
         tokenStorage.clear();
@@ -123,10 +180,10 @@ export const App = () => {
     return () => {
       cancelled = true;
     };
-  }, [sharedEventId]);
+  }, []);
 
   useEffect(() => {
-    if (!user || screen !== 'dashboard') return;
+    if (!user) return;
     let cancelled = false;
     const refreshEvents = (initial = false) => {
       if (initial) setEventsLoading(true);
@@ -141,7 +198,23 @@ export const App = () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [user?.id, screen]);
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    const refreshNotifications = () => {
+      void socialRequest<Array<unknown>>('/notifications')
+        .then((items) => { if (!cancelled) setSocialUnreadCount(items.length); })
+        .catch(() => { if (!cancelled) setSocialUnreadCount(0); });
+    };
+    refreshNotifications();
+    const timer = window.setInterval(refreshNotifications, 20000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     if (!sharedEventId) return;
@@ -190,11 +263,12 @@ export const App = () => {
     tokenStorage.set(response.access_token);
     sessionStorage.removeItem(FLOW_KEY);
     setUser(response.user);
+    setFriendCodeDraft(response.user.friend_code);
     setTheme(response.user.theme);
     setDocumentTheme(response.user.theme);
     setError('');
     setNotice('');
-    setScreen(sharedEventId ? 'event' : 'dashboard');
+    setScreen(sharedEventId ? 'event' : 'friends');
   };
 
   const handleRegister = async (event: FormEvent<HTMLFormElement>) => {
@@ -344,6 +418,44 @@ export const App = () => {
     }
   };
 
+  const handleFriendCodeSave = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const updated = await updateProfile<User>({ friend_code: friendCodeDraft.toUpperCase() });
+      setUser(updated);
+      setFriendCodeDraft(updated.friend_code);
+      setNotice('Identyfikator znajomego został zmieniony.');
+    } catch (requestError) {
+      setError(errorText(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleAccountDelete = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    setBusy(true);
+    setError('');
+    try {
+      await deleteAccount(String(data.get('delete_password')));
+      tokenStorage.clear();
+      setUser(null);
+      setEvents([]);
+      setShowAccountDelete(false);
+      window.history.replaceState({}, '', '/');
+      showScreen('login');
+      setNotice('Konto zostało trwale usunięte.');
+    } catch (requestError) {
+      setError(errorText(requestError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleLogout = () => {
     tokenStorage.clear();
     setUser(null);
@@ -457,8 +569,16 @@ export const App = () => {
           <span className="brand-mark"><CalendarDays size={20} strokeWidth={2.2} /></span>
           <span className="brand-name">Bit<span>2</span>Meet</span>
         </a>
+        {user && <nav className="main-nav-left" aria-label="Planowanie">
+          <button type="button" className={screen === 'friends' ? 'is-active' : ''} onClick={() => navigateTo('friends')}><CalendarDays size={15} /> Grafik</button>
+          <button type="button" className={screen === 'dashboard' || screen === 'event' ? 'is-active' : ''} onClick={() => navigateTo('dashboard')}><CalendarDays size={15} /> Wydarzenia</button>
+        </nav>}
+        {user && <nav className="main-nav-right" aria-label="Konto i znajomi">
+          <button type="button" className={screen === 'people' ? 'is-active' : ''} onClick={() => navigateTo('people')}><Users size={15} /> Znajomi</button>
+          <button type="button" className={screen === 'notifications' ? 'is-active' : ''} onClick={() => navigateTo('notifications')}><Bell size={15} /> Powiadomienia{socialUnreadCount > 0 && <span className="nav-count">{socialUnreadCount}</span>}</button>
+          <button type="button" className={screen === 'profile' ? 'is-active' : ''} onClick={() => navigateTo('profile')}><UserRound size={15} /> Profil</button>
+        </nav>}
         <div className="topbar-actions">
-          {user && <span className="topbar-user">{user.first_name}</span>}
           <button className="theme-toggle" onClick={handleThemeToggle} aria-label="Przełącz motyw">
             {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
             <span>{theme === 'dark' ? 'Jasny motyw' : 'Ciemny motyw'}</span>
@@ -468,36 +588,13 @@ export const App = () => {
 
       {screen === 'dashboard' && user ? (
         <main className="dashboard-page">
-          <div className="dashboard-heading">
-            <div className="eyebrow"><span className="status-dot" /> KONTO AKTYWNE</div>
-            <h1>Cześć, {user.first_name}.</h1>
-            <p>Twoje konto Bit2Meet jest gotowe do użycia.</p>
+          <div className="dashboard-heading-row">
+            <div className="dashboard-heading">
+              <div className="eyebrow"><span className="status-dot" /> PLANOWANIE SPOTKAŃ</div>
+              <h1>Wydarzenia</h1>
+              <p>Twórz spotkania i udostępniaj je znajomym.</p>
+            </div>
           </div>
-
-          <section className="dashboard-card profile-card">
-            <div className="section-heading">
-              <div className="section-icon"><UserRound size={19} /></div>
-              <div><h2>Twój profil</h2><p>Dane konta i preferencje</p></div>
-            </div>
-            <div className="profile-details">
-              <div><span>Imię i nazwisko</span><strong>{user.first_name} {user.last_name}</strong></div>
-              <div><span>Adres e-mail</span><strong>{user.email}</strong></div>
-            </div>
-            <form className="preference-form" onSubmit={handlePreferenceSave}>
-              <div className="preference-row">
-                <span className="preference-icon"><Bell size={18} /></span>
-                <span className="preference-copy"><strong>Powiadomienia o wydarzeniach</strong><small>Informacje o zmianach i ustalonych terminach</small></span>
-                <span className="radio-pair">
-                  <label><input type="radio" name="notify_on_events" value="yes" defaultChecked={user.notify_on_events} /> Tak</label>
-                  <label><input type="radio" name="notify_on_events" value="no" defaultChecked={!user.notify_on_events} /> Nie</label>
-                </span>
-              </div>
-              <button className="button button-secondary button-small" type="submit" disabled={busy}>
-                {busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}
-                Zapisz preferencję
-              </button>
-            </form>
-          </section>
 
           <section className="events-section">
             <div className="events-section-heading">
@@ -520,7 +617,7 @@ export const App = () => {
                 <p>Utwórz wydarzenie i udostępnij link, żeby wspólnie znaleźć dogodny termin.</p>
               </div>
               : <div className="event-list">{events.map((item) => <article className="dashboard-card event-card" key={item.id}>
-                <div className="event-card-top"><div><h3><a href={`/events/${item.public_id}`}>{item.title}</a></h3><p>{item.description || 'Bez opisu'}</p></div>
+                <div className="event-card-top"><div><h3><a href={`/events/${item.public_id}`} onClick={(event) => { event.preventDefault(); openEvent(item.public_id); }}>{item.title}</a></h3><p>{item.description || 'Bez opisu'}</p></div>
                   <div className="event-owner-actions">{item.is_owner && <span className="owner-badge">Twórca</span>}
                     {item.is_owner
                       ? <button type="button" className="event-manage-button" aria-label="Usuń wydarzenie" title="Usuń wydarzenie" disabled={busy} onClick={() => void handleDeleteEvent(item)}><Trash2 size={15} /></button>
@@ -538,12 +635,46 @@ export const App = () => {
           {(error || notice) && <Feedback error={error} notice={notice} />}
           <button className="logout-button" onClick={handleLogout}><LogOut size={16} /> Wyloguj się</button>
         </main>
+      ) : screen === 'profile' && user ? (
+        <main className="dashboard-page profile-page">
+          <div className="dashboard-heading"><div className="form-kicker">KONTO</div><h1>Profil i ustawienia</h1><p>Zarządzaj identyfikatorem i preferencjami.</p></div>
+          <section className="dashboard-card profile-card">
+            <div className="section-heading"><div className="section-icon"><UserRound size={19} /></div><div><h2>{user.first_name} {user.last_name}</h2><p>{user.email}</p></div></div>
+            <div className="profile-details"><div><span>Twój identyfikator</span><strong className="profile-friend-code">#{user.friend_code}</strong></div><div><span>Imię i nazwisko</span><strong>{user.first_name} {user.last_name}</strong></div></div>
+            <form className="preference-form friend-code-form" onSubmit={handleFriendCodeSave}>
+              <label htmlFor="friend-code">Własny identyfikator</label>
+              <div className="friend-code-input"><span>#</span><input id="friend-code" value={friendCodeDraft} onChange={(event) => setFriendCodeDraft(event.target.value.replace(/[^a-z0-9]/gi, '').slice(0, 6).toUpperCase())} minLength={6} maxLength={6} pattern="[A-Z0-9]{6}" required /></div>
+              <small>Dokładnie 6 liter lub cyfr. Identyfikator musi być wolny.</small>
+              <button className="button button-secondary button-small" type="submit" disabled={busy || friendCodeDraft === user.friend_code}><Check size={16} /> Zapisz identyfikator</button>
+            </form>
+            <form className="preference-form" onSubmit={handlePreferenceSave}>
+              <div className="preference-row"><span className="preference-icon"><Bell size={18} /></span><span className="preference-copy"><strong>Powiadomienia o wydarzeniach</strong><small>Informacje o zmianach i ustalonych terminach</small></span><span className="radio-pair"><label><input type="radio" name="notify_on_events" value="yes" defaultChecked={user.notify_on_events} /> Tak</label><label><input type="radio" name="notify_on_events" value="no" defaultChecked={!user.notify_on_events} /> Nie</label></span></div>
+              <button className="button button-secondary button-small" type="submit" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />} Zapisz preferencję</button>
+            </form>
+            <div className="account-delete-area">
+              {!showAccountDelete ? <button className="account-delete-trigger" type="button" onClick={() => { setError(''); setShowAccountDelete(true); }}><Trash2 size={15} /> Usuń konto</button> : <form className="account-delete-form" onSubmit={handleAccountDelete}>
+                <h3>Trwale usunąć konto?</h3><p>Twoje konto, dostępność, wiadomości i spotkania, które utworzyłeś, zostaną usunięte. Tej operacji nie można cofnąć.</p><Field label="Potwierdź hasłem"><input name="delete_password" type="password" autoComplete="current-password" required /></Field>
+                <div className="account-delete-actions"><button className="button button-secondary button-small" type="button" disabled={busy} onClick={() => setShowAccountDelete(false)}>Anuluj</button><button className="button account-delete-confirm button-small" type="submit" disabled={busy}>{busy ? <LoaderCircle size={15} className="spin" /> : <Trash2 size={15} />} Trwale usuń konto</button></div>
+              </form>}
+            </div>
+          </section>
+          {(error || notice) && <Feedback error={error} notice={notice} />}
+          <button className="logout-button" onClick={handleLogout}><LogOut size={16} /> Wyloguj się</button>
+        </main>
+      ) : ['friends', 'people', 'notifications'].includes(screen) && user ? (
+        <FriendsPage
+          events={events}
+          currentUserName={`${user.first_name} ${user.last_name}`}
+          view={screen === 'people' ? 'people' : screen === 'notifications' ? 'notifications' : 'schedule'}
+          onEventAccepted={(joined) => setEvents((current) => current.some((item) => item.id === joined.id)
+            ? current.map((item) => item.id === joined.id ? joined : item)
+            : [joined, ...current])}
+        />
       ) : screen === 'event' ? (
         <main className="event-page event-calendar-page">
           <button className="back-link event-back" onClick={() => {
             if (user) {
-              window.history.replaceState({}, '', '/');
-              setScreen('dashboard');
+              navigateTo('dashboard');
             } else showScreen('login');
           }}>
             <ArrowLeft size={16} /> {user ? 'Moje wydarzenia' : 'Przejdź do logowania'}
@@ -571,7 +702,7 @@ export const App = () => {
               {(error || notice) && <Feedback error={error} notice={notice} />}
               {user && isMember && <>
                 <div className="event-workspace">
-                  <AvailabilityGrid publicId={sharedEvent.public_id} />
+                  <AvailabilityGrid publicId={sharedEvent.public_id} currentUserId={user.id} currentUserName={`${user.first_name} ${user.last_name}`} />
                   <EventChat publicId={sharedEvent.public_id} userId={user.id} unreadCount={sharedEvent.unread_count} onCountChange={handleMessageCountChange} />
                 </div>
               </>}

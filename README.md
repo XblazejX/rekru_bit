@@ -96,6 +96,18 @@ Domyślnie `EMAIL_MODE=mock`: kod jest wypisywany w logach API, co pozwala uruch
 
 Link udostępniony uczestnikom otwiera stronę konkretnego spotkania. Konto jest wymagane do dołączenia; po logowaniu lub rejestracji użytkownik wraca do spotkania i zostaje do niego dodany.
 
+### Znajomi, powiadomienia i wspólny grafik
+
+- Każde konto otrzymuje unikalny identyfikator `#XXXXXX`, który można zmienić w profilu.
+- `POST /api/social/friend-requests` — wysłanie zaproszenia po identyfikatorze; odbiorca akceptuje je w powiadomieniach.
+- `GET /api/social/notifications` — oczekujące zaproszenia do znajomych i wydarzeń.
+- `GET /api/social/friends` — lista zaakceptowanych znajomych.
+- `GET` i `PUT /api/social/availability/me` — odczyt i zapis własnej tygodniowej dostępności.
+- `GET /api/social/availability` — dostępność zaakceptowanych znajomych w wybranym zakresie dat.
+- `POST /api/events/{public_id}/invitations` — zaproszenie znajomego do spotkania; zaproszony akceptuje je w powiadomieniach.
+
+Po zalogowaniu otwiera się tygodniowy grafik znajomych. Własną dostępność dodaje się, edytuje i usuwa blokami, a zmiany zapisują się automatycznie. Wspólny grafik jest widoczny tylko dla zaakceptowanych znajomych. Usunięcie znajomego od razu odbiera dostęp do jego dostępności.
+
 ---
 
 ## 4. Uruchomienie lokalne (Development)
