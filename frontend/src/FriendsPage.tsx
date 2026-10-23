@@ -1,6 +1,7 @@
 import { CSSProperties, FormEvent, MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Bell, CalendarDays, Check, ChevronLeft, ChevronRight, LoaderCircle, MailPlus, MessageCircle, Trash2, Users, X } from 'lucide-react';
 import { EventItem, eventRequest, socialRequest } from './api';
+import { availabilityColor, FRIEND_AVATAR_COLORS } from './scheduleColors';
 import './styles/friends.css';
 
 interface Friend {
@@ -33,8 +34,6 @@ interface PersonalSlot {
 }
 
 const SLOT_COUNT = 48;
-const COLORS = ['#46b6d5', '#a47be1', '#54b88b', '#e4a34e', '#e77994', '#7f99e7', '#b3a64c'];
-
 function mondayOf(date: Date): Date {
   const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
@@ -96,6 +95,7 @@ export default function FriendsPage({
   const [sharedSlots, setSharedSlots] = useState<SharedSlot[]>([]);
   const [ownSlots, setOwnSlots] = useState<Set<string>>(new Set());
   const [ownNotes, setOwnNotes] = useState<Map<string, string>>(new Map());
+  const [highlightedUserId, setHighlightedUserId] = useState<number | null>(null);
   const [weekStart, setWeekStart] = useState(() => mondayOf(new Date()));
   const [friendCode, setFriendCode] = useState('');
   const [selectedEventId, setSelectedEventId] = useState('');
@@ -118,38 +118,32 @@ export default function FriendsPage({
   const range = useMemo(() => dateRange(weekStart), [weekStart]);
   const rangeRef = useRef(range);
   const availabilityBlocks = useMemo(() => {
-    const blocks: Array<{ dayIndex: number; start: number; end: number; participantIds: number[]; names: string[]; own: boolean }> = [];
+    const blocks: Array<{ dayIndex: number; start: number; end: number; participantIds: number[]; count: number }> = [];
     const friendKeys = new Map(friends.map((friend) => [friend.id, new Set(sharedSlots.filter((slot) => slot.user_id === friend.id).map((slot) => new Date(slot.slot_start).toISOString()))]));
     days.forEach((day, dayIndex) => {
       let rangeStart = -1;
-      let rangeIds: number[] = [];
+      let rangeCount = 0;
+      let rangeIds = new Set<number>();
       for (let slot = 0; slot <= SLOT_COUNT; slot += 1) {
         const key = slot < SLOT_COUNT ? slotDate(day, slot).toISOString() : '';
-        const activeIds = slot < SLOT_COUNT ? friends.filter((friend) => friendKeys.get(friend.id)?.has(key)).map((friend) => friend.id).sort((a, b) => a - b) : [];
-        if (activeIds.join(',') !== rangeIds.join(',')) {
-          if (rangeIds.length) {
-            blocks.push({
-              dayIndex, start: rangeStart, end: slot, participantIds: rangeIds,
-              names: rangeIds.map((id) => `${friends.find((friend) => friend.id === id)?.first_name ?? ''} ${friends.find((friend) => friend.id === id)?.last_name ?? ''}`.trim()),
-              own: false,
-            });
+        const activeIds = slot < SLOT_COUNT
+          ? friends.filter((friend) => friendKeys.get(friend.id)?.has(key)).map((friend) => friend.id)
+          : [];
+        if (slot < SLOT_COUNT && ownSlots.has(key)) activeIds.push(-1);
+        if (activeIds.length !== rangeCount) {
+          if (rangeCount > 0) {
+            blocks.push({ dayIndex, start: rangeStart, end: slot, participantIds: [...rangeIds], count: rangeCount });
           }
           rangeStart = activeIds.length ? slot : -1;
-          rangeIds = activeIds;
-        }
-      }
-      let ownStart = -1;
-      for (let slot = 0; slot <= SLOT_COUNT; slot += 1) {
-        const own = slot < SLOT_COUNT && ownSlots.has(slotDate(day, slot).toISOString());
-        if (own && ownStart < 0) ownStart = slot;
-        if (!own && ownStart >= 0) {
-          blocks.push({ dayIndex, start: ownStart, end: slot, participantIds: [-1], names: [currentUserName], own: true });
-          ownStart = -1;
+          rangeCount = activeIds.length;
+          rangeIds = new Set(activeIds);
+        } else if (rangeCount > 0) {
+          activeIds.forEach((id) => rangeIds.add(id));
         }
       }
     });
-    return blocks;
-  }, [currentUserName, days, friends, ownSlots, sharedSlots]);
+    return blocks.map((block) => ({ ...block, participantIds: block.participantIds.sort((first, second) => first - second) }));
+  }, [days, friends, ownSlots, sharedSlots]);
 
   const loadPage = async (showSpinner = true, refreshPersonalSlots = true) => {
     if (showSpinner) setLoading(true);
@@ -354,13 +348,14 @@ export default function FriendsPage({
 
   const showNotesForSlot = (event: ReactMouseEvent<HTMLButtonElement>, day: Date, slot: number) => {
     const key = slotDate(day, slot).toISOString();
-    const dayIndex = days.findIndex((date) => date.toDateString() === day.toDateString());
-    const blocks = availabilityBlocks.filter((item) => item.dayIndex === dayIndex && slot >= item.start && slot < item.end);
-    if (!blocks.length) {
+    const participantIds = [
+      ...friends.filter((friend) => sharedSlots.some((entry) => entry.user_id === friend.id && new Date(entry.slot_start).toISOString() === key)).map((friend) => friend.id),
+      ...(ownSlots.has(key) ? [-1] : []),
+    ];
+    if (!participantIds.length) {
       setHoverNote(null);
       return;
     }
-    const participantIds = [...new Set(blocks.flatMap((block) => block.participantIds))];
     const hasSlot = (userId: number, index: number) => {
       if (index < 0 || index >= SLOT_COUNT) return false;
       const slotKey = slotDate(day, index).toISOString();
@@ -513,7 +508,7 @@ export default function FriendsPage({
         {loading ? <div className="friends-empty"><LoaderCircle className="spin" size={18} /> Wczytywanie…</div>
           : friends.length === 0 ? <div className="friends-empty">Nie masz jeszcze znajomych. Dodaj kogoś po identyfikatorze.</div>
             : <div className="friend-list">{friends.map((friend, index) => <article className="friend-row" key={friend.id}>
-              <span className="friend-avatar" style={{ '--friend-color': COLORS[index % COLORS.length] } as CSSProperties}>{friend.first_name.slice(0, 1)}{friend.last_name.slice(0, 1)}</span>
+              <span className="friend-avatar" style={{ '--friend-color': FRIEND_AVATAR_COLORS[index % FRIEND_AVATAR_COLORS.length] } as CSSProperties}>{friend.first_name.slice(0, 1)}{friend.last_name.slice(0, 1)}</span>
               <strong>{friend.first_name} {friend.last_name}</strong>
               {events.length > 0 && <button className="friend-invite-button" disabled={busy || !selectedEventId} onClick={() => void inviteFriend(friend)}><MailPlus size={14} /> Zaproś</button>}
               <button className="friend-remove-button" aria-label={`Usuń ${friend.first_name} ze znajomych`} title="Usuń ze znajomych" disabled={busy} onClick={() => void removeFriend(friend)}><Trash2 size={15} /></button>
@@ -525,7 +520,11 @@ export default function FriendsPage({
         <div className="friends-section-title friends-calendar-title"><div><h2><CalendarDays size={17} /> Dostępność znajomych</h2><p>Kliknij pola, aby ustawić swój wolny czas. Zmiany zapisują się automatycznie.</p></div>
           <div className="friends-week-controls"><button aria-label="Poprzedni tydzień" onClick={() => changeWeek(-1)}><ChevronLeft size={17} /></button><strong>{weekLabel}</strong><button aria-label="Następny tydzień" onClick={() => changeWeek(1)}><ChevronRight size={17} /></button><button className="friends-now-button availability-now-button" onClick={jumpToCurrentTime}><span />Teraz</button></div>
         </div>
-        <div className="friends-legend"><span><i className="friend-legend-own" /> Twój czas</span>{friends.map((friend, index) => <span key={friend.id}><i style={{ background: COLORS[index % COLORS.length] }} /> {friend.first_name}</span>)}<small>{saveStatus}</small></div>
+        <div className="friends-legend" role="group" aria-label="Wyróżnij dostępność osoby">
+          <button type="button" className={`friends-legend-person${highlightedUserId === -1 ? ' is-selected' : ''}`} aria-pressed={highlightedUserId === -1} onClick={() => setHighlightedUserId((current) => current === -1 ? null : -1)}><i style={{ background: availabilityColor(100 / (friends.length + 1)) }} /> {currentUserName}</button>
+          {friends.map((friend) => <button type="button" className={`friends-legend-person${highlightedUserId === friend.id ? ' is-selected' : ''}`} aria-pressed={highlightedUserId === friend.id} key={friend.id} onClick={() => setHighlightedUserId((current) => current === friend.id ? null : friend.id)}><i style={{ background: availabilityColor(100 / (friends.length + 1)) }} /> {friend.first_name} {friend.last_name}</button>)}
+          <small>{saveStatus}</small>
+        </div>
         <div className="friends-calendar-scroll">
           {loading ? <div className="friends-empty"><LoaderCircle className="spin" size={18} /> Wczytywanie grafiku…</div> : <div className="friends-calendar-grid">
             <div className="friends-calendar-row friends-calendar-header"><span className="friends-time-heading" />{days.map((day) => <div className="friends-day-heading" key={day.toISOString()}><span>{dateLabel(day, { weekday: 'short' })}</span><strong>{dateLabel(day, { day: 'numeric', month: 'short' })}</strong></div>)}</div>
@@ -534,24 +533,35 @@ export default function FriendsPage({
               {days.map((day) => {
                 const dateKey = slotDate(day, slot).toISOString();
                 const own = ownSlots.has(dateKey);
-                const block = availabilityBlocks.find((item) => item.dayIndex === days.indexOf(day) && slot >= item.start && slot < item.end);
-                const title = block?.names.join(', ') ?? '';
+                const slotPeople = friends.filter((friend) => sharedSlots.some((entry) => entry.user_id === friend.id && new Date(entry.slot_start).toISOString() === dateKey));
+                const title = [...(ownSlots.has(dateKey) ? [currentUserName] : []), ...slotPeople.map((person) => `${person.first_name} ${person.last_name}`)].join(', ');
                 const past = slotDate(day, slot).getTime() < now.getTime();
                 return <button className={`friends-calendar-cell${own ? ' is-own' : ''}${past ? ' is-past' : ''}`} type="button" key={dateKey} aria-disabled={past} tabIndex={past ? -1 : 0} aria-label={`${dateLabel(day, { weekday: 'long', day: 'numeric', month: 'long' })} ${slotTime(slot)}${title ? `, ${title}` : ''}${past ? ', termin minął' : ''}`} onMouseEnter={(event) => showNotesForSlot(event, day, slot)} onMouseLeave={() => setHoverNote(null)} onClick={() => { if (!past) openBlockDialog(day, slot); }} />;
               })}
               {todayIndex >= 0 && slot === nowSlot && <div className="friends-now-line" style={{ top: `${nowFraction * 100}%` }} aria-hidden="true"><span><i>{now.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit', hour12: false })}</i></span></div>}
             </div>)}
             {availabilityBlocks.map((block) => {
-              const stripeWidth = 100 / block.participantIds.length;
-              const gradient = block.participantIds.map((id, index) => {
-                const color = id === -1 ? 'var(--accent)' : COLORS[friends.findIndex((friend) => friend.id === id) % COLORS.length];
-                return `${color} ${index * stripeWidth}% ${(index + 1) * stripeWidth}%`;
-              }).join(', ');
               const day = days[block.dayIndex];
-              const hasNote = block.own
-                ? Array.from({ length: block.end - block.start }, (_, offset) => ownNotes.has(slotDate(day, block.start + offset).toISOString())).some(Boolean)
-                : sharedSlots.some((entry) => block.participantIds.includes(entry.user_id) && entry.note && new Date(entry.slot_start).getTime() >= slotDate(day, block.start).getTime() && new Date(entry.slot_start).getTime() < slotDate(day, block.end).getTime());
-              return <div className={`friends-availability-overlay${block.own ? ' is-own' : ''}`} key={`${block.dayIndex}-${block.participantIds.join('-')}-${block.start}`} style={{ top: `${42 + block.start * 26}px`, height: `${(block.end - block.start) * 26}px` }}><span style={{ gridColumn: block.dayIndex + 2, background: `linear-gradient(90deg, ${gradient})` }}>{hasNote && <MessageCircle className="friends-block-note-icon" size={13} />}</span></div>;
+              const hasNote = sharedSlots.some((entry) => block.participantIds.includes(entry.user_id) && entry.note && new Date(entry.slot_start).getTime() >= slotDate(day, block.start).getTime() && new Date(entry.slot_start).getTime() < slotDate(day, block.end).getTime())
+                || (block.participantIds.includes(-1) && Array.from({ length: block.end - block.start }, (_, offset) => ownNotes.has(slotDate(day, block.start + offset).toISOString())).some(Boolean));
+              const percentage = block.count * 100 / (friends.length + 1);
+              return <div className="friends-availability-overlay" key={`${block.dayIndex}-${block.start}-${block.count}`} style={{ top: `${42 + block.start * 26}px`, height: `${(block.end - block.start) * 26}px` }}><span style={{ gridColumn: block.dayIndex + 2, background: availabilityColor(percentage) }}>{hasNote && <MessageCircle className="friends-block-note-icon" size={13} />}</span></div>;
+            })}
+            {highlightedUserId !== null && days.flatMap((day, dayIndex) => {
+              const userSlots = highlightedUserId === -1
+                ? ownSlots
+                : new Set(sharedSlots.filter((entry) => entry.user_id === highlightedUserId).map((entry) => new Date(entry.slot_start).toISOString()));
+              const ranges: Array<{ start: number; end: number }> = [];
+              let start = -1;
+              for (let slot = 0; slot <= SLOT_COUNT; slot += 1) {
+                const available = slot < SLOT_COUNT && userSlots.has(slotDate(day, slot).toISOString());
+                if (available && start < 0) start = slot;
+                if (!available && start >= 0) {
+                  ranges.push({ start, end: slot });
+                  start = -1;
+                }
+              }
+              return ranges.map((block) => <div className="friends-selected-overlay" aria-hidden="true" key={`${highlightedUserId}-${dayIndex}-${block.start}`} style={{ top: `${42 + block.start * 26}px`, height: `${(block.end - block.start) * 26}px` }}><span style={{ gridColumn: dayIndex + 2 }} /></div>);
             })}
           </div>}
         </div>

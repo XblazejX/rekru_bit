@@ -121,7 +121,7 @@ describe('Bit2Meet authentication UI', () => {
     expect(await screen.findByRole('heading', { name: 'Grafik znajomych' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Profil' }));
     fireEvent.click(screen.getAllByLabelText('Nie')[0]);
-    fireEvent.click(screen.getByRole('button', { name: /zapisz preferencję/i }));
+    fireEvent.click(screen.getByRole('button', { name: /zapisz preferencje/i }));
     await waitFor(() => expect(calls.some((call) => call.method === 'PATCH')).toBe(true));
 
     fireEvent.click(screen.getByRole('button', { name: 'Przełącz motyw' }));

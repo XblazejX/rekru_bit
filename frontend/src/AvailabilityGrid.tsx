@@ -1,6 +1,7 @@
 import { FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Clock3, LoaderCircle, MessageCircle, Trash2, X } from 'lucide-react';
 import { eventRequest } from './api';
+import { availabilityColor } from './scheduleColors';
 import './styles/availability.css';
 
 interface AvailabilityAggregate {
@@ -125,6 +126,7 @@ export default function AvailabilityGrid({ publicId, currentUserId, currentUserN
   const [savedNotes, setSavedNotes] = useState<Map<string, string>>(() => new Map());
   const [noteSlots, setNoteSlots] = useState<AvailabilityNote[]>([]);
   const [participantSlots, setParticipantSlots] = useState<AvailabilityParticipant[]>([]);
+  const [highlightedUserId, setHighlightedUserId] = useState<number | null>(null);
   const [aggregate, setAggregate] = useState<AvailabilityAggregate | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -191,6 +193,30 @@ export default function AvailabilityGrid({ publicId, currentUserId, currentUserN
     () => new Map((aggregate?.slots ?? []).map((slot) => [new Date(slot.slot_start).toISOString(), slot])),
     [aggregate],
   );
+  const schedulePeople = useMemo(() => {
+    const people = new Map<number, string>([[currentUserId, currentUserName]]);
+    participantSlots.forEach((entry) => people.set(entry.user_id, entry.user_name));
+    return [...people].sort(([firstId], [secondId]) => firstId - secondId).map(([id, name]) => ({ id, name }));
+  }, [currentUserId, currentUserName, participantSlots]);
+  const highlightedBlocks = useMemo(() => {
+    if (highlightedUserId === null) return [];
+    const userSlots = highlightedUserId === currentUserId
+      ? selected
+      : new Set(participantSlots.filter((entry) => entry.user_id === highlightedUserId).map((entry) => new Date(entry.slot_start).toISOString()));
+    const blocks: Array<{ dateIndex: number; start: number; end: number }> = [];
+    dates.forEach((date, dateIndex) => {
+      let start = -1;
+      for (let slot = 0; slot <= SLOT_COUNT; slot += 1) {
+        const available = slot < SLOT_COUNT && userSlots.has(slotKey(date, slot));
+        if (available && start < 0) start = slot;
+        if (!available && start >= 0) {
+          blocks.push({ dateIndex, start, end: slot });
+          start = -1;
+        }
+      }
+    });
+    return blocks;
+  }, [currentUserId, dates, highlightedUserId, participantSlots, selected]);
   const visualBlocks = useMemo(() => {
     const blocks: Array<{ dateIndex: number; start: number; end: number; count?: number; own?: boolean }> = [];
     const noteBlocks: Array<{ dateIndex: number; start: number; end: number; note: string; userId: number; userName: string }> = [];
@@ -517,6 +543,13 @@ export default function AvailabilityGrid({ publicId, currentUserId, currentUserN
         <button type="button" className="availability-now-button" onClick={jumpToNow}><span />Teraz</button>
       </div>
 
+      <div className="availability-people-legend" role="group" aria-label="Wyróżnij dostępność uczestnika">
+        {schedulePeople.map((person) => <button type="button" className={`availability-person-button${highlightedUserId === person.id ? ' is-selected' : ''}`} aria-pressed={highlightedUserId === person.id} key={person.id} onClick={() => setHighlightedUserId((current) => current === person.id ? null : person.id)}>
+          <i style={{ backgroundColor: availabilityColor(100 / schedulePeople.length) }} />{person.name}
+        </button>)}
+        {!schedulePeople.length && <span className="availability-people-empty">Brak uczestników</span>}
+      </div>
+
       <div className="availability-scroll" ref={scrollRef} aria-label="Kalendarz; kliknij godzinę, aby dodać blok dostępności">
         <div className="period-navigation">
           <button type="button" aria-label="Poprzedni dzień lub tydzień" onClick={() => changePeriod(-1)}><ChevronLeft size={17} /></button>
@@ -571,15 +604,13 @@ export default function AvailabilityGrid({ publicId, currentUserId, currentUserN
               const percentage = aggregate?.total_participants && block.count
                 ? block.count * 100 / aggregate.total_participants
                 : 0;
-              const hue = Math.round(14 + percentage * 0.78);
-              const opacity = 0.15 + percentage / 310;
               return <div
                 aria-hidden="true"
-                className={`availability-block-overlay ${block.own ? 'availability-own-block' : 'availability-heat-block'}`}
+                className={`availability-block-overlay ${block.own ? `availability-own-block${highlightedUserId !== null && highlightedUserId !== currentUserId ? ' is-unhighlighted' : ''}` : 'availability-heat-block'}`}
                 key={`${block.dateIndex}-${block.start}-${block.own ? 'own' : block.count}`}
                 style={{ top: `${HEADER_HEIGHT + block.start * ROW_HEIGHT}px`, height: `${(block.end - block.start) * ROW_HEIGHT}px` }}
               >
-                <span style={{ gridColumn: block.dateIndex + 2, ...(block.own ? {} : { backgroundColor: `hsl(${hue} 39% 47% / ${opacity})` }) }} />
+                <span style={{ gridColumn: block.dateIndex + 2, ...(block.own ? {} : { backgroundColor: availabilityColor(percentage) }) }} />
               </div>;
             })}
             {visualBlocks.noteBlocks.map((block) => <div
@@ -589,6 +620,14 @@ export default function AvailabilityGrid({ publicId, currentUserId, currentUserN
               style={{ top: `${HEADER_HEIGHT + block.start * ROW_HEIGHT}px`, height: `${(block.end - block.start) * ROW_HEIGHT}px` }}
             >
               <span style={{ gridColumn: block.dateIndex + 2 }}><MessageCircle size={13} /></span>
+            </div>)}
+            {highlightedBlocks.map((block) => <div
+              aria-hidden="true"
+              className="availability-block-overlay availability-participant-outline"
+              key={`participant-${highlightedUserId}-${block.dateIndex}-${block.start}`}
+              style={{ top: `${HEADER_HEIGHT + block.start * ROW_HEIGHT}px`, height: `${(block.end - block.start) * ROW_HEIGHT}px` }}
+            >
+              <span style={{ gridColumn: block.dateIndex + 2 }} />
             </div>)}
           </div>
         )}
