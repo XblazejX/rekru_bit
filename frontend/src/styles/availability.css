@@ -75,6 +75,8 @@
 .availability-note-overlay svg { padding: 2px; width: 18px; height: 18px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); box-shadow: var(--shadow-sm); }
 .availability-participant-outline { z-index: 3; }
 .availability-participant-outline span { margin: 1px 2px; border: 2px solid var(--accent); border-radius: 8px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bg) 50%, transparent), 0 1px 5px rgb(0 0 0 / 14%); }
+.availability-drag-preview-block { z-index: 4; }
+.availability-drag-preview-block span { margin: 1px 2px; border: 2px solid var(--accent); border-radius: 8px; background: color-mix(in srgb, var(--accent) 22%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bg) 35%, transparent), 0 1px 5px rgb(0 0 0 / 14%); }
 .availability-note-popover { position: fixed; z-index: 100; width: min(260px, calc(100vw - 24px)); max-height: min(150px, calc(100vh - 24px)); overflow-y: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; color: var(--text); background: var(--surface); box-shadow: 0 8px 24px rgb(0 0 0 / 22%); pointer-events: none; }
 .availability-note-popover > strong { display: block; margin-bottom: 5px; color: var(--accent); font-size: .68rem; font-variant-numeric: tabular-nums; }
 .availability-note-popover-entry + .availability-note-popover-entry { padding-top: 6px; margin-top: 6px; border-top: 1px solid var(--border); }

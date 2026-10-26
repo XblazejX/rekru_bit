@@ -1,159 +1,41 @@
-# Bit2Meet — Koordynator terminów (BIT Web)
+# Bit2Meet
 
-Bit2Meet to nowoczesna aplikacja webowa do wspólnego ustalania terminów spotkań, inspirowana rozwiązaniami takimi jak When2meet oraz LettuceMeet.
+Bit2Meet to aplikacja do wspólnego ustalania terminów spotkań. Użytkownicy mogą tworzyć wydarzenia, zapraszać innych przez link lub znajomych, zaznaczać dostępność w kalendarzu i rozmawiać na czacie wydarzenia. Aplikacja oferuje też profile, powiadomienia i wspólny grafik znajomych.
 
-Użytkownicy mogą tworzyć wydarzenia, udostępniać je uczestnikom za pomocą publicznego linku, zaznaczać swoją dostępność na interaktywnej siatce godzinowej i łatwo identyfikować optymalny termin spotkania.
+## Uruchomienie
 
----
+1. Zainstaluj i uruchom [Docker Desktop](https://www.docker.com/products/docker-desktop/).
+2. Otwórz terminal w folderze projektu.
+3. Utwórz plik konfiguracyjny `.env` z przykładowego pliku:
 
-## 1. Architektura i Stack Technologiczny
-
-| Warstwa | Technologia | Zastosowanie |
-|---|---|---|
-| **Frontend** | React 18, TypeScript, Vite | Interaktywny interfejs użytkownika, SPA |
-| **Stylowanie** | CSS (zmienne CSS) | Spójne motywy: ciemny (domyślny) i jasny |
-| **Backend API** | Python 3.12, FastAPI | Asynchroniczne REST API |
-| **Baza danych** | PostgreSQL 16 | Relacyjna baza danych |
-| **Dostęp do bazy** | SQLAlchemy 2.0 (asyncpg), Alembic | Asynchroniczny ORM i migracje schematu |
-| **Uwierzytelnianie** | JWT (PyJWT), bcrypt | Bezpieczna autoryzacja i hashowanie haseł |
-| **Poczta e-mail** | SMTP (aiosmtplib) | Kody weryfikacyjne i powiadomienia |
-| **Konteneryzacja** | Docker & Docker Compose | Spójne środowisko uruchomieniowe |
-| **Serwowanie WWW** | Nginx | Reverse proxy dla API i serwowanie SPA |
-| **Testy** | pytest, httpx, Vitest, Testing Library | Testy jednostkowe i integracyjne |
-
----
-
-## 2. Struktura Repozytorium
-
-```text
-bit2meet/
-├── frontend/             # Aplikacja React + Vite + TypeScript
-│   ├── src/
-│   │   ├── styles/       # Zmienne CSS i motywy (dark/light)
-│   │   ├── tests/        # Testy Vitest / React Testing Library
-│   │   ├── App.tsx       # Główny widok weryfikacyjny (Etap 1)
-│   │   └── main.tsx      # Punkt wejścia SPA
-│   ├── Dockerfile        # Multi-stage Dockerfile (Node -> Nginx)
-│   ├── nginx.conf        # Konfiguracja Nginx z proxy /api/
-│   └── package.json
-├── backend/              # Asynchroniczne API FastAPI w Pythonie
-│   ├── app/
-│   │   ├── api/          # Endpointy REST API (w tym /api/health)
-│   │   ├── core/         # Konfiguracja z Pydantic Settings
-│   │   ├── db/           # Asynchroniczna sesja SQLAlchemy
-│   │   └── main.py       # Główna aplikacja FastAPI
-│   ├── tests/            # Testy automatyczne pytest
-│   ├── Dockerfile        # Obraz produkcyjny Python 3.12-slim
-│   └── pyproject.toml    # Zależności i konfiguracja Ruff/Pytest
-├── docker-compose.yml    # Orkiestracja serwisów db, api, web
-├── .env.example          # Szablon zmiennych środowiskowych
-└── README.md
-```
-
----
-
-## 3. Szybki start (Docker Compose)
-
-### Wymagania
-- Docker & Docker Compose
-
-### Uruchomienie
-1. Skopiuj plik środowiskowy:
-   ```bash
-   cp .env.example .env
+   ```powershell
+   Copy-Item .env.example .env
    ```
-2. Zbuduj i uruchom kontenery w tle:
-   ```bash
+
+   Jeśli `.env` już istnieje, nie kopiuj pliku ponownie. Domyślna konfiguracja używa testowej poczty (`EMAIL_MODE=mock`), więc nie trzeba ustawiać danych SMTP. Kody rejestracyjne można odczytać w logach API.
+
+4. Zbuduj i uruchom aplikację:
+
+   ```powershell
    docker compose up --build -d
    ```
-   Kontener API automatycznie zastosuje oczekujące migracje Alembica przed uruchomieniem serwera.
-3. Aplikacja jest dostępna pod adresami:
-   - **Frontend (Web):** [http://localhost:3000](http://localhost:3000)
-   - **Backend API:** [http://localhost:8000](http://localhost:8000)
-   - **Dokumentacja Swagger:** [http://localhost:8000/docs](http://localhost:8000/docs)
-   - **Healthcheck API:** [http://localhost:8000/api/health](http://localhost:8000/api/health)
-   - **Healthcheck Bazy:** [http://localhost:8000/api/health/db](http://localhost:8000/api/health/db)
 
-### Uwierzytelnianie (Etap 3)
+5. Otwórz aplikację: [http://localhost:3000](http://localhost:3000).
 
-Endpointy są dostępne pod prefiksem `/api/auth`:
+Przy pierwszym uruchomieniu Docker pobierze potrzebne obrazy, a baza danych zostanie przygotowana automatycznie.
 
-- `POST /register` — rejestracja konta i wysłanie kodu weryfikacyjnego
-- `POST /verify` i `POST /resend-code` — potwierdzenie adresu e-mail i ponowna wysyłka kodu
-- `POST /login` — token JWT dla aktywnego konta
-- `POST /forgot-password` i `POST /reset-password` — reset hasła kodem
-- `GET /me` i `PATCH /me` — profil, motyw oraz zgoda na powiadomienia
+Zatrzymanie aplikacji:
 
-Domyślnie `EMAIL_MODE=mock`: kod jest wypisywany w logach API, co pozwala uruchomić projekt bez konta pocztowego. Dla SMTP ustaw `EMAIL_MODE=smtp` oraz `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` i `SMTP_FROM` w lokalnym `.env`. Nie umieszczaj haseł ani kluczy pocztowych w repozytorium.
-
-### Spotkania i linki
-
-- `POST /api/events` — utworzenie spotkania (nazwa i opis; dni oraz godziny wybierają uczestnicy).
-- `GET /api/events` — lista spotkań zalogowanego użytkownika.
-- `GET /api/events/{public_id}` — publiczne szczegóły spotkania dostępne z linku.
-- `POST /api/events/{public_id}/join` — dołączenie do spotkania po zalogowaniu.
-- `GET /api/events/{public_id}/membership` — sprawdzenie członkostwa.
-
-Link udostępniony uczestnikom otwiera stronę konkretnego spotkania. Konto jest wymagane do dołączenia; po logowaniu lub rejestracji użytkownik wraca do spotkania i zostaje do niego dodany.
-
-### Znajomi, powiadomienia i wspólny grafik
-
-- Każde konto otrzymuje unikalny identyfikator `#XXXXXX`, który można zmienić w profilu.
-- `POST /api/social/friend-requests` — wysłanie zaproszenia po identyfikatorze; odbiorca akceptuje je w powiadomieniach.
-- `GET /api/social/notifications` — oczekujące zaproszenia do znajomych i wydarzeń.
-- `GET /api/social/friends` — lista zaakceptowanych znajomych.
-- `GET` i `PUT /api/social/availability/me` — odczyt i zapis własnej tygodniowej dostępności.
-- `GET /api/social/availability` — dostępność zaakceptowanych znajomych w wybranym zakresie dat.
-- `POST /api/events/{public_id}/invitations` — zaproszenie znajomego do spotkania; zaproszony akceptuje je w powiadomieniach.
-
-Po zalogowaniu otwiera się tygodniowy grafik znajomych. Własną dostępność dodaje się, edytuje i usuwa blokami, a zmiany zapisują się automatycznie. Wspólny grafik jest widoczny tylko dla zaakceptowanych znajomych. Usunięcie znajomego od razu odbiera dostęp do jego dostępności. Profil pozwala ustawić e-maile o zaproszeniach do znajomych i wydarzeń; wysyłka używa tej samej konfiguracji SMTP co kody weryfikacyjne.
-
----
-
-## 4. Uruchomienie lokalne (Development)
-
-### Backend
-```bash
-cd backend
-python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# Linux/macOS:
-# source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+```powershell
+docker compose down
 ```
 
-### Frontend
-```bash
-cd frontend
-npm install
-npm run dev
-```
+## Technologie
 
----
+React, TypeScript, FastAPI, PostgreSQL, SQLAlchemy, Alembic i Docker Compose.
 
-## 5. Testy automatyczne
+## Wykorzystanie AI
 
-### Testy backendu (pytest & ruff)
-```bash
-cd backend
-pytest -v
-ruff check .
-```
+Podczas tworzenia projektu korzystano z narzędzi AI, w tym ChatGPT, do wsparcia projektowania, implementacji i poprawiania kodu. Wprowadzone zmiany były weryfikowane przez autora projektu.
 
-### Testy frontendu (Vitest & typecheck)
-```bash
-cd frontend
-npm run test
-npm run lint
-```
-
----
-
-## 6. Informacja o wykorzystaniu AI (Oświadczenie)
-
-Zgodnie z wymaganiami projektu i zasadami transparentności:
-- Projekt **Bit2Meet** jest rozwijany we współpracy z asystentem AI (**Antigravity / Gemini**).
-- Każdy fragment kodu, konfiguracji oraz architektury podlegał rygorystycznemu cyklowi weryfikacji: planowanie, wdrożenie, statyczna analiza kodu, testy jednostkowe oraz testy uruchomieniowe.
-- AI było wykorzystywane jako zaawansowane narzędzie wspierające projektowanie architektury, generowanie szablonów testów i automatyzację powtarzalnych zadań programistycznych.
+## Lubie pizze i kebsa

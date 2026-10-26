@@ -41,6 +41,97 @@ describe('shared schedule colors', () => {
 });
 
 describe('availability schedule highlighting', () => {
+  it('adds an event availability range by dragging and saves it automatically', async () => {
+    const date = new Date();
+    date.setDate(date.getDate() + 2);
+    const dayLabel = new Intl.DateTimeFormat('pl-PL', {
+      weekday: 'long', day: 'numeric', month: 'long',
+    }).format(date);
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    vi.spyOn(global, 'fetch').mockImplementation((input, init) => {
+      const url = input.toString();
+      requests.push({ url, init });
+      if (url.endsWith('/availability')) {
+        return Promise.resolve(response({ public_id: 'example', total_participants: 1, slots: [] }));
+      }
+      if (url.endsWith('/availability/me') && init?.method === 'PUT') {
+        const body = JSON.parse(String(init.body)) as { slot_starts: string[] };
+        return Promise.resolve(response(body.slot_starts.map((slot_start, index) => ({
+          id: index + 1, event_id: 1, user_id: 7, slot_start, note: '',
+        }))));
+      }
+      if (url.endsWith('/availability/me') || url.endsWith('/availability/notes')
+        || url.includes('/availability/participants?')) return Promise.resolve(response([]));
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    const { container } = render(<AvailabilityGrid publicId="example" currentUserId={7} currentUserName="Anna Nowak" />);
+    await screen.findByRole('grid');
+    const cells = [...container.querySelectorAll<HTMLButtonElement>('.availability-cell')];
+    const first = cells.find((cell) => cell.getAttribute('aria-label')?.startsWith(`${dayLabel}, 10:00.`));
+    const second = cells.find((cell) => cell.getAttribute('aria-label')?.startsWith(`${dayLabel}, 10:30.`));
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+
+    fireEvent.pointerDown(first!, { button: 0, pointerId: 1 });
+    fireEvent.pointerEnter(second!, { pointerId: 1 });
+    expect(second).toHaveClass('is-drag-preview');
+    fireEvent.pointerUp(window, { pointerId: 1 });
+
+    await waitFor(() => {
+      const save = requests.find((request) => request.url.endsWith('/availability/me') && request.init?.method === 'PUT');
+      expect(save).toBeDefined();
+      expect(JSON.parse(String(save?.init?.body)).slot_starts).toHaveLength(2);
+    }, { timeout: 2500 });
+
+    const canceledStart = cells.find((cell) => cell.getAttribute('aria-label')?.startsWith(`${dayLabel}, 11:00.`));
+    const canceledEnd = cells.find((cell) => cell.getAttribute('aria-label')?.startsWith(`${dayLabel}, 11:30.`));
+    fireEvent.pointerDown(canceledStart!, { button: 0, pointerId: 2 });
+    fireEvent.pointerEnter(canceledEnd!, { pointerId: 2 });
+    fireEvent.pointerCancel(window, { pointerId: 2 });
+    expect(canceledEnd).not.toHaveClass('is-drag-preview');
+    await new Promise((resolve) => window.setTimeout(resolve, 750));
+    expect(requests.filter((request) => request.url.endsWith('/availability/me') && request.init?.method === 'PUT')).toHaveLength(1);
+  });
+
+  it('adds a friends schedule range by dragging and saves it automatically', async () => {
+    const date = new Date();
+    date.setDate(date.getDate() + 2);
+    const dayLabel = new Intl.DateTimeFormat('pl-PL', {
+      weekday: 'long', day: 'numeric', month: 'long',
+    }).format(date);
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    vi.spyOn(global, 'fetch').mockImplementation((input, init) => {
+      const url = input.toString();
+      requests.push({ url, init });
+      if (url.endsWith('/social/friends') || url.endsWith('/social/notifications')) return Promise.resolve(response([]));
+      if (url.includes('/social/availability/me?') || url.includes('/social/availability?')) return Promise.resolve(response([]));
+      if (url.endsWith('/social/availability/me') && init?.method === 'PUT') {
+        return Promise.resolve(response([]));
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    const { container } = render(<FriendsPage events={[]} currentUserName="Anna Nowak" view="schedule" onEventAccepted={() => undefined} />);
+    await screen.findByText('Dostępność znajomych');
+    const cells = [...container.querySelectorAll<HTMLButtonElement>('.friends-calendar-cell')];
+    const first = cells.find((cell) => cell.getAttribute('aria-label')?.startsWith(`${dayLabel} 10:00`));
+    const second = cells.find((cell) => cell.getAttribute('aria-label')?.startsWith(`${dayLabel} 10:30`));
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+
+    fireEvent.pointerDown(first!, { button: 0, pointerId: 1 });
+    fireEvent.pointerEnter(second!, { pointerId: 1 });
+    expect(second).toHaveClass('is-drag-preview');
+    fireEvent.pointerUp(window, { pointerId: 1 });
+
+    await waitFor(() => {
+      const save = requests.find((request) => request.url.endsWith('/social/availability/me') && request.init?.method === 'PUT');
+      expect(save).toBeDefined();
+      expect(JSON.parse(String(save?.init?.body)).slot_starts).toHaveLength(2);
+    }, { timeout: 2500 });
+  });
+
   it('highlights one friend at a time and toggles the outline off', async () => {
     const firstSlot = slot(2, 10);
     const secondSlot = slot(2, 10, 30);

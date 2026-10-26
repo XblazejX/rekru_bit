@@ -58,6 +58,12 @@ function slotDate(date: Date, slot: number): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate(), Math.floor(slot / 2), slot % 2 ? 30 : 0);
 }
 
+function firstNotStartedSlot(now: Date): number {
+  const minutes = now.getHours() * 60 + now.getMinutes()
+    + (now.getSeconds() * 1000 + now.getMilliseconds()) / 60_000;
+  return Math.min(SLOT_COUNT, Math.ceil(minutes / 30));
+}
+
 function timeForIndex(index: number): string {
   if (index === SLOT_COUNT) return '24:00';
   return `${String(Math.floor(index / 2)).padStart(2, '0')}:${index % 2 ? '30' : '00'}`;
@@ -114,6 +120,10 @@ export default function FriendsPage({
   const pendingNowJump = useRef(false);
   const ownSlotsRef = useRef(ownSlots);
   const ownNotesRef = useRef(ownNotes);
+  const dragRef = useRef<{ dayIndex: number; start: number; end: number; moved: boolean } | null>(null);
+  const suppressClick = useRef(false);
+  const [dragPreview, setDragPreview] = useState<Set<string>>(() => new Set());
+  const finishDragRef = useRef<() => void>(() => undefined);
   const days = useMemo(() => Array.from({ length: 7 }, (_, index) => plusDays(weekStart, index)), [weekStart]);
   const range = useMemo(() => dateRange(weekStart), [weekStart]);
   const rangeRef = useRef(range);
@@ -248,7 +258,7 @@ export default function FriendsPage({
       let end = slot + 1;
       while (end < SLOT_COUNT && ownSlots.has(slotDate(date, end).toISOString())) end += 1;
       const today = date.toDateString() === now.toDateString();
-      const editableStart = today ? Math.max(start, now.getHours() * 2 + (now.getMinutes() >= 30 ? 1 : 0)) : start;
+      const editableStart = today ? Math.max(start, firstNotStartedSlot(now)) : start;
       setBlockDialog({ day: date, editStart: editableStart, editEnd: end });
       setBlockStart(timeForIndex(editableStart));
       setBlockEnd(end === SLOT_COUNT ? '00:00' : timeForIndex(end));
@@ -290,7 +300,7 @@ export default function FriendsPage({
     let mergedStart = start;
     let mergedEnd = end;
     const today = blockDialog.day.toDateString() === now.toDateString();
-    const editableFloor = today ? now.getHours() * 2 + (now.getMinutes() >= 30 ? 1 : 0) : 0;
+    const editableFloor = today ? firstNotStartedSlot(now) : 0;
     while (mergedStart > editableFloor && nextSlots.has(slotDate(blockDialog.day, mergedStart - 1).toISOString())) mergedStart -= 1;
     while (mergedEnd < SLOT_COUNT && nextSlots.has(slotDate(blockDialog.day, mergedEnd).toISOString())) mergedEnd += 1;
     const note = blockNote.trim();
@@ -307,6 +317,64 @@ export default function FriendsPage({
     setBlockDialog(null);
     setError('');
   };
+
+  const startAvailabilityDrag = (day: Date, dayIndex: number, slot: number) => {
+    const key = slotDate(day, slot).toISOString();
+    if (slotDate(day, slot).getTime() < now.getTime() || ownSlots.has(key)) return;
+    dragRef.current = { dayIndex, start: slot, end: slot, moved: false };
+    setDragPreview(new Set([key]));
+    setHoverNote(null);
+  };
+
+  const extendAvailabilityDrag = (day: Date, dayIndex: number, slot: number) => {
+    const drag = dragRef.current;
+    if (!drag || drag.dayIndex !== dayIndex || slotDate(day, slot).getTime() < now.getTime()) return;
+    if (slot !== drag.start) drag.moved = true;
+    drag.end = slot;
+    const first = Math.min(drag.start, drag.end);
+    const last = Math.max(drag.start, drag.end);
+    setDragPreview(new Set(Array.from({ length: last - first + 1 }, (_, offset) => slotDate(day, first + offset).toISOString())));
+  };
+
+  const finishAvailabilityDrag = () => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    dragRef.current = null;
+    setDragPreview(new Set());
+    if (!drag.moved) return;
+    const day = days[drag.dayIndex];
+    if (!day) return;
+    const first = Math.min(drag.start, drag.end);
+    const last = Math.max(drag.start, drag.end);
+    const added = Array.from({ length: last - first + 1 }, (_, offset) => slotDate(day, first + offset).toISOString())
+      .filter((key) => new Date(key).getTime() >= Date.now());
+    if (!added.length) return;
+    const next = new Set(ownSlotsRef.current);
+    added.forEach((key) => next.add(key));
+    ownSlotsRef.current = next;
+    setOwnSlots(next);
+    if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
+    setSaveStatus('');
+    saveTimer.current = window.setTimeout(() => void persistSlots(next, ownNotesRef.current), 400);
+    setError('');
+    suppressClick.current = true;
+    window.setTimeout(() => { suppressClick.current = false; }, 0);
+  };
+
+  finishDragRef.current = finishAvailabilityDrag;
+  useEffect(() => {
+    const onPointerUp = () => finishDragRef.current();
+    const onPointerCancel = () => {
+      dragRef.current = null;
+      setDragPreview(new Set());
+    };
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerCancel);
+    return () => {
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
+    };
+  }, []);
 
   const deleteBlock = () => {
     if (!blockDialog || blockDialog.editStart === null || blockDialog.editEnd === null) return;
@@ -530,13 +598,13 @@ export default function FriendsPage({
             <div className="friends-calendar-row friends-calendar-header"><span className="friends-time-heading" />{days.map((day) => <div className="friends-day-heading" key={day.toISOString()}><span>{dateLabel(day, { weekday: 'short' })}</span><strong>{dateLabel(day, { day: 'numeric', month: 'short' })}</strong></div>)}</div>
             {Array.from({ length: SLOT_COUNT }, (_, slot) => <div className="friends-calendar-row" data-slot-index={slot} key={slot}>
               <span className={`friends-time-label${slot % 2 === 0 ? ' hour' : ''}`}>{slot % 2 === 0 ? slotTime(slot) : ''}</span>
-              {days.map((day) => {
+              {days.map((day, dayIndex) => {
                 const dateKey = slotDate(day, slot).toISOString();
                 const own = ownSlots.has(dateKey);
                 const slotPeople = friends.filter((friend) => sharedSlots.some((entry) => entry.user_id === friend.id && new Date(entry.slot_start).toISOString() === dateKey));
                 const title = [...(ownSlots.has(dateKey) ? [currentUserName] : []), ...slotPeople.map((person) => `${person.first_name} ${person.last_name}`)].join(', ');
                 const past = slotDate(day, slot).getTime() < now.getTime();
-                return <button className={`friends-calendar-cell${own ? ' is-own' : ''}${past ? ' is-past' : ''}`} type="button" key={dateKey} aria-disabled={past} tabIndex={past ? -1 : 0} aria-label={`${dateLabel(day, { weekday: 'long', day: 'numeric', month: 'long' })} ${slotTime(slot)}${title ? `, ${title}` : ''}${past ? ', termin minął' : ''}`} onMouseEnter={(event) => showNotesForSlot(event, day, slot)} onMouseLeave={() => setHoverNote(null)} onClick={() => { if (!past) openBlockDialog(day, slot); }} />;
+                return <button className={`friends-calendar-cell${own ? ' is-own' : ''}${past ? ' is-past' : ''}${dragPreview.has(dateKey) ? ' is-drag-preview' : ''}`} type="button" key={dateKey} aria-disabled={past} tabIndex={past ? -1 : 0} aria-label={`${dateLabel(day, { weekday: 'long', day: 'numeric', month: 'long' })} ${slotTime(slot)}${title ? `, ${title}` : ''}${past ? ', termin minął' : ''}`} onMouseEnter={(event) => showNotesForSlot(event, day, slot)} onMouseLeave={() => setHoverNote(null)} onPointerDown={() => startAvailabilityDrag(day, dayIndex, slot)} onPointerEnter={() => extendAvailabilityDrag(day, dayIndex, slot)} onClick={() => { if (suppressClick.current) { suppressClick.current = false; return; } if (!past) openBlockDialog(day, slot); }} />;
               })}
               {todayIndex >= 0 && slot === nowSlot && <div className="friends-now-line" style={{ top: `${nowFraction * 100}%` }} aria-hidden="true"><span><i>{now.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit', hour12: false })}</i></span></div>}
             </div>)}

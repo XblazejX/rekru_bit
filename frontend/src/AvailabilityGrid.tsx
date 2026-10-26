@@ -85,6 +85,12 @@ function isPastSlot(date: Date, slotIndex: number, now: Date): boolean {
   return slotDate.getTime() < now.getTime();
 }
 
+function firstNotStartedSlot(now: Date): number {
+  const minutes = now.getHours() * 60 + now.getMinutes()
+    + (now.getSeconds() * 1000 + now.getMilliseconds()) / 60_000;
+  return Math.min(SLOT_COUNT, Math.ceil(minutes / 30));
+}
+
 function sameSlots(first: Set<string>, second: Set<string>): boolean {
   return first.size === second.size && [...first].every((slot) => second.has(slot));
 }
@@ -141,6 +147,10 @@ export default function AvailabilityGrid({ publicId, currentUserId, currentUserN
   const [hoverNote, setHoverNote] = useState<{ key: string; left: number; top: number; range: string; notes: Array<{ userName: string; range: string; note: string }> } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const jumpAfterRender = useRef(false);
+  const dragRef = useRef<{ dateIndex: number; start: number; end: number; moved: boolean } | null>(null);
+  const suppressClick = useRef(false);
+  const [dragPreview, setDragPreview] = useState<Set<string>>(() => new Set());
+  const finishDragRef = useRef<() => void>(() => undefined);
 
   useEffect(() => {
     let cancelled = false;
@@ -285,6 +295,21 @@ export default function AvailabilityGrid({ publicId, currentUserId, currentUserN
     });
     return { blocks, ownRanges, heatRanges, noteBlocks, noteRanges };
   }, [aggregate?.total_participants, aggregateBySlot, dates, noteSlots, savedSlots, selected]);
+  const dragPreviewBlocks = useMemo(() => {
+    const blocks: Array<{ dateIndex: number; start: number; end: number }> = [];
+    dates.forEach((date, dateIndex) => {
+      let start = -1;
+      for (let slotIndex = 0; slotIndex <= SLOT_COUNT; slotIndex += 1) {
+        const included = slotIndex < SLOT_COUNT && dragPreview.has(slotKey(date, slotIndex));
+        if (included && start < 0) start = slotIndex;
+        if (!included && start >= 0) {
+          blocks.push({ dateIndex, start, end: slotIndex });
+          start = -1;
+        }
+      }
+    });
+    return blocks;
+  }, [dates, dragPreview]);
 
   const showNotePopover = (event: MouseEvent<HTMLButtonElement>, dateIndex: number, slotIndex: number) => {
     const day = dates[dateIndex];
@@ -397,6 +422,8 @@ export default function AvailabilityGrid({ publicId, currentUserId, currentUserN
     let endIndex = Math.min(SLOT_COUNT, slotIndex + 2);
     if (selected.has(key)) {
       while (startIndex > 0 && selected.has(slotKey(date, startIndex - 1))) startIndex -= 1;
+      const editableStart = dateInputValue(date) === dateInputValue(now) ? firstNotStartedSlot(now) : 0;
+      startIndex = Math.max(startIndex, editableStart);
       endIndex = slotIndex + 1;
       while (endIndex < SLOT_COUNT && selected.has(slotKey(date, endIndex))) endIndex += 1;
       setEditingBlock({ start: startIndex, end: endIndex });
@@ -411,6 +438,58 @@ export default function AvailabilityGrid({ publicId, currentUserId, currentUserN
     setError('');
     setNotice('');
   };
+
+  const startDrag = (date: Date, dateIndex: number, slotIndex: number) => {
+    if (isPastSlot(date, slotIndex, now) || selected.has(slotKey(date, slotIndex))) return;
+    dragRef.current = { dateIndex, start: slotIndex, end: slotIndex, moved: false };
+    setDragPreview(new Set([slotKey(date, slotIndex)]));
+    setHoverNote(null);
+  };
+
+  const extendDrag = (date: Date, dateIndex: number, slotIndex: number) => {
+    const drag = dragRef.current;
+    if (!drag || drag.dateIndex !== dateIndex || isPastSlot(date, slotIndex, now)) return;
+    if (slotIndex !== drag.start) drag.moved = true;
+    drag.end = slotIndex;
+    const first = Math.min(drag.start, drag.end);
+    const last = Math.max(drag.start, drag.end);
+    setDragPreview(new Set(Array.from({ length: last - first + 1 }, (_, offset) => slotKey(date, first + offset))));
+  };
+
+  const finishDrag = () => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    dragRef.current = null;
+    setDragPreview(new Set());
+    if (!drag.moved) return;
+    const date = dates[drag.dateIndex];
+    if (!date) return;
+    const first = Math.min(drag.start, drag.end);
+    const last = Math.max(drag.start, drag.end);
+    const keys = Array.from({ length: last - first + 1 }, (_, offset) => slotKey(date, first + offset))
+      .filter((_, offset) => !isPastSlot(date, first + offset, now));
+    if (!keys.length) return;
+    setSelected((current) => new Set([...current, ...keys]));
+    setNotice('Termin dodany. Zapisuję dostępność…');
+    setError('');
+    suppressClick.current = true;
+    window.setTimeout(() => { suppressClick.current = false; }, 0);
+  };
+
+  finishDragRef.current = finishDrag;
+  useEffect(() => {
+    const onPointerUp = () => finishDragRef.current();
+    const onPointerCancel = () => {
+      dragRef.current = null;
+      setDragPreview(new Set());
+    };
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerCancel);
+    return () => {
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
+    };
+  }, []);
 
   const addBlock = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -592,7 +671,9 @@ export default function AvailabilityGrid({ publicId, currentUserId, currentUserN
                     tabIndex={key === firstEditableKey ? 0 : -1}
                     onMouseEnter={(event) => showNotePopover(event, dateIndex, slotIndex)}
                     onMouseLeave={() => setHoverNote(null)}
-                    onClick={() => openSlotDialog(date, slotIndex)}
+                    onPointerDown={() => startDrag(date, dateIndex, slotIndex)}
+                    onPointerEnter={() => extendDrag(date, dateIndex, slotIndex)}
+                    onClick={() => { if (suppressClick.current) { suppressClick.current = false; return; } openSlotDialog(date, slotIndex); }}
                   />
                 </div>;
               })}
@@ -625,6 +706,14 @@ export default function AvailabilityGrid({ publicId, currentUserId, currentUserN
               aria-hidden="true"
               className="availability-block-overlay availability-participant-outline"
               key={`participant-${highlightedUserId}-${block.dateIndex}-${block.start}`}
+              style={{ top: `${HEADER_HEIGHT + block.start * ROW_HEIGHT}px`, height: `${(block.end - block.start) * ROW_HEIGHT}px` }}
+            >
+              <span style={{ gridColumn: block.dateIndex + 2 }} />
+            </div>)}
+            {dragPreviewBlocks.map((block) => <div
+              aria-hidden="true"
+              className="availability-block-overlay availability-drag-preview-block"
+              key={`drag-preview-${block.dateIndex}-${block.start}`}
               style={{ top: `${HEADER_HEIGHT + block.start * ROW_HEIGHT}px`, height: `${(block.end - block.start) * ROW_HEIGHT}px` }}
             >
               <span style={{ gridColumn: block.dateIndex + 2 }} />
